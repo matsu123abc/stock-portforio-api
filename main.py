@@ -1,17 +1,33 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import pandas as pd
 import yfinance as yf
 from dotenv import load_dotenv
-from openai import OpenAI
+from openai import AzureOpenAI
 import os
+import requests
+from bs4 import BeautifulSoup
 
+# ============================
+# 初期化
+# ============================
 load_dotenv()
-client = OpenAI()
-
 app = FastAPI()
 
-# --- summary の数値をカンマ付きに整形 ---
+# ============================
+# Azure OpenAI クライアント
+# ============================
+client = AzureOpenAI(
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
+)
+
+AZURE_MODEL = os.getenv("AZURE_OPENAI_DEPLOYMENT")  # 例: gpt-4o-mini
+
+# ============================
+# summary の整形
+# ============================
 def format_summary_value(x):
     if isinstance(x, str) and "%" in x:
         return x
@@ -19,7 +35,9 @@ def format_summary_value(x):
         return f"{x:,}"
     return x
 
-# --- yfinance info から使う項目だけ抜き出して整形 ---
+# ============================
+# ファンダメンタル取得
+# ============================
 def get_fundamentals(ticker: str):
     t = yf.Ticker(ticker)
     try:
@@ -48,7 +66,9 @@ def get_fundamentals(ticker: str):
         "fiftyTwoWeekLow": g("fiftyTwoWeekLow"),
     }
 
-# --- 市場データ（推奨セット）取得 ---
+# ============================
+# 市場データ取得
+# ============================
 def get_market_snapshot():
     tickers = {
         "nikkei_225": "^N225",
@@ -66,7 +86,9 @@ def get_market_snapshot():
         data[name] = price
     return pd.DataFrame([data])
 
-# --- Gradio版 process_excel の完全移植 ---
+# ============================
+# ポートフォリオ分析（Gradio版の完全移植）
+# ============================
 def analyze_portfolio(df_portfolio, df_summary, df_strategy, df_realized):
 
     # --- realized_trades profit 計算 ---
@@ -103,7 +125,7 @@ def analyze_portfolio(df_portfolio, df_summary, df_strategy, df_realized):
     df_portfolio["profit"] = profits
     df_portfolio["profit_rate"] = profit_rates
 
-    # --- summary 更新 ---
+    # summary 更新
     invested_amount = df_summary.loc[df_summary["item"] == "invested_amount", "value"].iloc[0]
     total_investment_frame = df_summary.loc[df_summary["item"] == "total_investment_frame", "value"].iloc[0]
     annual_target_profit = df_summary.loc[df_summary["item"] == "annual_target_profit", "value"].iloc[0]
@@ -121,14 +143,14 @@ def analyze_portfolio(df_portfolio, df_summary, df_strategy, df_realized):
     df_summary.loc[df_summary["item"] == "total_profit_rate", "value"] = f"{total_profit_rate * 100:.1f}%"
     df_summary.loc[df_summary["item"] == "progress_to_target", "value"] = f"{progress_to_target * 100:.1f}%"
 
-    # --- ファンダメンタル ---
+    # ファンダメンタル
     fundamentals_list = [get_fundamentals(str(t)) for t in df_portfolio["ticker"]]
     fundamentals_df = pd.DataFrame(fundamentals_list)
 
-    # --- 市場データ ---
+    # 市場データ
     market_df = get_market_snapshot()
 
-    # --- AI 戦略レポート ---
+    # --- AI 戦略レポート（Azure OpenAI 版） ---
     prompt = f"""
 あなたはプロの投資アナリストです。
 
@@ -153,15 +175,17 @@ target_achievement:
 """
 
     ai_res = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
+        model=AZURE_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
     )
     strategy_text = ai_res.choices[0].message.content
 
     return df_portfolio, df_summary, strategy_text
 
-
-# --- API: Excel を受け取り、分析結果を返す ---
+# ============================
+# API: Excel アップロード → 分析
+# ============================
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
     xls = pd.ExcelFile(file.file)
@@ -181,8 +205,9 @@ async def analyze(file: UploadFile = File(...)):
         "strategy": strategy
     }
 
-
-# --- スマホUI（HTML） ---
+# ============================
+# スマホUI（HTML）
+# ============================
 @app.get("/", response_class=HTMLResponse)
 async def index():
     return """
@@ -231,5 +256,3 @@ async function upload() {
 </body>
 </html>
 """
-
-
