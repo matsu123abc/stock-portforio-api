@@ -6,4 +6,6 @@ openpyxl
 yfinance
 openai
 python-dotenv
+beautifulsoup4
+lxml
 
