@@ -245,6 +245,10 @@ async def mobile():
 
         <h2>📈 ポートフォリオ一覧</h2>
 
+        <button onclick="updatePrices()" style="background:#ff9800; width:100%; margin-bottom:20px;">
+        🔄 株価を更新する
+        </button>
+
         <!-- Summary 表示エリア -->
         <div class="summary-box" id="summary">
             Summary を読み込み中...
@@ -305,8 +309,109 @@ async def mobile():
             }
 
             loadData();
+
+            async function updatePrices() {
+                const res = await fetch('/update_prices', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                alert("株価を更新しました！");
+                loadData();  // 再読み込み
+            }
+
         </script>
 
     </body>
     </html>
     """
+
+@app.post("/update_prices")
+async def update_prices():
+    portfolio, summary = load_json()
+
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
+
+    # DataFrame に戻す
+    df = pd.DataFrame(portfolio)
+
+    # 株価更新
+    current_prices = []
+    values = []
+    profits = []
+    profit_rates = []
+
+    for _, row in df.iterrows():
+        ticker = str(row["ticker"])
+
+        try:
+            price = yf.Ticker(ticker).history(period="1d")["Close"].iloc[-1]
+        except:
+            price = None
+
+        current_prices.append(price)
+
+        if price is not None:
+            value = price * row["shares"]
+        else:
+            value = None
+        values.append(value)
+
+        if value is not None:
+            profit = value - (row["cost"] * row["shares"])
+        else:
+            profit = None
+        profits.append(profit)
+
+        if profit is not None:
+            profit_rate = profit / (row["cost"] * row["shares"])
+        else:
+            profit_rate = None
+        profit_rates.append(profit_rate)
+
+    df["current_price"] = current_prices
+    df["value"] = values
+    df["profit"] = profits
+    df["profit_rate"] = profit_rates
+
+    # summary 再計算
+    invested_amount = int((df["cost"] * df["shares"]).sum())
+    portfolio_value = float(df["value"].replace("", 0).sum())
+    total_profit = float(portfolio_value - invested_amount)
+    total_profit_rate = float(total_profit / invested_amount) if invested_amount > 0 else 0.0
+
+    total_investment_frame = summary["total_investment_frame"]
+    annual_target_profit = summary["annual_target_profit"]
+
+    remaining_cash = int(total_investment_frame - invested_amount)
+    progress_to_target = float(total_profit / annual_target_profit)
+
+    summary_new = {
+        "total_investment_frame": total_investment_frame,
+        "invested_amount": invested_amount,
+        "portfolio_value": portfolio_value,
+        "total_profit": total_profit,
+        "total_profit_rate": total_profit_rate,
+        "remaining_cash": remaining_cash,
+        "annual_target_profit": annual_target_profit,
+        "progress_to_target": progress_to_target
+    }
+
+    # buy_date を文字列化
+    if "buy_date" in df.columns:
+        df["buy_date"] = df["buy_date"].astype(str)
+
+    portfolio_new = df.fillna("").to_dict(orient="records")
+
+    # JSON 保存
+    save_json(portfolio_new, summary_new)
+
+    return {
+        "message": "株価を更新しました",
+        "portfolio": portfolio_new,
+        "summary": summary_new
+    }
