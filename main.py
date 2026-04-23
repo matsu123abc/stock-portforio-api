@@ -73,30 +73,28 @@ async def upload(file: UploadFile = File(...)):
         if "summary" in xls.sheet_names:
             df_summary = pd.read_excel(xls, sheet_name="summary")
 
-            # Excel から固定値を取得
             total_investment_frame = int(df_summary.loc[df_summary["item"] == "total_investment_frame", "value"].values[0])
             annual_target_profit = int(df_summary.loc[df_summary["item"] == "annual_target_profit", "value"].values[0])
         else:
-            # summary シートが無い場合のデフォルト
             total_investment_frame = 10000000
             annual_target_profit = 3000000
 
-        # portfolio の集計
-        invested_amount = (df["cost"] * df["shares"]).sum()
-        portfolio_value = df["value"].replace("", 0).sum()
-        total_profit = portfolio_value - invested_amount
-        total_profit_rate = total_profit / invested_amount if invested_amount > 0 else 0
-        remaining_cash = total_investment_frame - invested_amount
-        progress_to_target = total_profit / annual_target_profit if annual_target_profit > 0 else 0
+        # portfolio の集計（numpy → Python 型へ変換）
+        invested_amount = int((df["cost"] * df["shares"]).sum())
+        portfolio_value = float(df["value"].replace("", 0).sum())
+        total_profit = float(portfolio_value - invested_amount)
+        total_profit_rate = float(total_profit / invested_amount) if invested_amount > 0 else 0.0
+        remaining_cash = int(total_investment_frame - invested_amount)
+        progress_to_target = float(total_profit / annual_target_profit) if annual_target_profit > 0 else 0.0
 
         summary_json = {
-            "total_investment_frame": total_investment_frame,
+            "total_investment_frame": int(total_investment_frame),
             "invested_amount": invested_amount,
             "portfolio_value": portfolio_value,
             "total_profit": total_profit,
             "total_profit_rate": total_profit_rate,
             "remaining_cash": remaining_cash,
-            "annual_target_profit": annual_target_profit,
+            "annual_target_profit": int(annual_target_profit),
             "progress_to_target": progress_to_target
         }
 
