@@ -502,7 +502,7 @@ async def update_ai_comment():
                 model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.3,
-                max_tokens=200
+                max_tokens=1500
             )
             ai_comment = res.choices[0].message.content.strip()
 
