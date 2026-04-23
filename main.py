@@ -1,15 +1,27 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
+import pandas as pd
 
 app = FastAPI()
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
-    return {
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "message": "File received successfully"
-    }
+    try:
+        # Excel を読み込む
+        xls = pd.ExcelFile(file.file)
+        sheet_names = xls.sheet_names
+
+        return {
+            "filename": file.filename,
+            "sheet_names": sheet_names,
+            "message": "Excel loaded successfully"
+        }
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": f"Excel 読み込みエラー: {str(e)}"}
+        )
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -18,7 +30,7 @@ async def index():
 <html lang="ja">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Step1 File Upload Test</title>
+<title>Step2 Excel Sheet Test</title>
 <style>
 body { font-family: sans-serif; padding: 20px; }
 button { padding: 10px 20px; font-size: 16px; }
@@ -27,7 +39,7 @@ pre { background: #f0f0f0; padding: 10px; white-space: pre-wrap; }
 </head>
 <body>
 
-<h2>Step1: ファイルアップロードテスト</h2>
+<h2>Step2: Excel のシート名を確認</h2>
 <input type="file" id="fileInput">
 <button onclick="upload()">アップロード</button>
 
