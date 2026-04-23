@@ -59,6 +59,85 @@ def load_json():
 
     return portfolio, summary
 
+# -----------------------------
+# AI コメント生成
+# -----------------------------
+def generate_ai_comment(item):
+    ticker = item["ticker"]
+
+    # --- 業績データ取得 ---
+    yf_ticker = yf.Ticker(ticker)
+    info = yf_ticker.info
+
+    company_summary = info.get("longBusinessSummary", "")
+    sector = info.get("sector", "")
+    industry = info.get("industry", "")
+    market_cap = info.get("marketCap", "")
+    revenue = info.get("totalRevenue", "")
+    profit_margin = info.get("profitMargins", "")
+    pe_ratio = info.get("trailingPE", "")
+    eps = info.get("trailingEps", "")
+
+    # --- ニュース取得（株探） ---
+    try:
+        url = f"https://kabutan.jp/stock/news?code={ticker.replace('.T','')}"
+        html = requests.get(url, timeout=5).text
+        soup = BeautifulSoup(html, "lxml")
+        news_list = [n.text.strip() for n in soup.select(".news_item a")][:3]
+        news_text = "\n".join(news_list)
+    except:
+        news_text = "ニュース取得に失敗しました"
+
+    # --- AI プロンプト ---
+    prompt = f"""
+あなたはプロの株式アナリストです。
+以下の銘柄について、業績・ニュース・株価を総合的に分析し、
+投資家にとって価値のあるコメントを作成してください。
+
+【銘柄情報】
+ティッカー: {item['ticker']}
+銘柄名: {item['name']}
+購入単価: {item['cost']}
+株数: {item['shares']}
+現在値: {item['current_price']}
+損益: {item['profit']}
+損益率: {item['profit_rate']}
+
+【業績データ】
+セクター: {sector}
+業種: {industry}
+時価総額: {market_cap}
+売上高: {revenue}
+利益率: {profit_margin}
+PER: {pe_ratio}
+EPS: {eps}
+
+【会社概要】
+{company_summary}
+
+【最新ニュース（株探）】
+{news_text}
+
+【出力形式】
+### 現状の評価
+（業績・ニュースを踏まえた評価）
+
+### 今後の戦略
+（買い増し / ホールド / 利益確定）
+
+### 注意点
+（業績リスク・競合リスク・市場リスク）
+"""
+
+    res = client.chat.completions.create(
+        model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+        max_tokens=1500
+    )
+
+    return res.choices[0].message.content.strip()
+
 
 # -----------------------------
 # Excel アップロード → 計算 → JSON 保存
@@ -542,7 +621,7 @@ async def update_ai_comment():
         except Exception as e:
             ai_comment = f"AI コメント生成エラー: {str(e)}"
 
-        item["ai_comment"] = ai_comment
+        item["ai_comment"] = generate_ai_comment(item)
         updated_portfolio.append(item)
 
     # JSON 保存
@@ -609,3 +688,4 @@ async def update_ai_summary():
         "message": "AI 統括コメントを更新しました",
         "summary": summary
     }
+
