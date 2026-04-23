@@ -292,16 +292,28 @@ async def mobile():
                     const profitText = item.profit.toLocaleString();
 
                     html += `
+
                         <div class="card">
                             <div class="title">[${item.ticker}] ${item.name}</div>
                             <div>購入単価: ${item.cost} / 株数: ${item.shares}</div>
                             <div>購入日: ${item.buy_date}</div>
+
                             <div class="${profitClass}">
                                 損益: ${profitText} 円
                             </div>
+
+                            <!-- AI コメント表示 -->
+                            <div style="margin-top:10px; padding:8px; background:#eef; border-radius:6px;">
+                                <b>AI コメント</b><br>
+                                <div style="white-space:pre-wrap; font-size:14px;">
+                                    ${item.ai_comment ? item.ai_comment : "（コメントなし）"}
+                                </div>
+                            </div>
+
                             <button onclick="alert('編集は Step9 で実装します')">編集</button>
                             <button onclick="alert('削除は Step9 で実装します')">削除</button>
                         </div>
+
                     `;
                 });
 
