@@ -3,9 +3,51 @@ from fastapi.responses import HTMLResponse, JSONResponse
 import pandas as pd
 import io
 import yfinance as yf
+import os
+import json
 
 app = FastAPI()
 
+# -----------------------------
+# JSON 保存用ディレクトリ
+# -----------------------------
+DATA_DIR = "/home/data"
+os.makedirs(DATA_DIR, exist_ok=True)
+
+PORTFOLIO_JSON = os.path.join(DATA_DIR, "portfolio.json")
+SUMMARY_JSON = os.path.join(DATA_DIR, "summary.json")
+
+
+# -----------------------------
+# JSON 保存
+# -----------------------------
+def save_json(portfolio, summary):
+    with open(PORTFOLIO_JSON, "w", encoding="utf-8") as f:
+        json.dump(portfolio, f, ensure_ascii=False, indent=2)
+
+    with open(SUMMARY_JSON, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
+
+# -----------------------------
+# JSON 読み込み
+# -----------------------------
+def load_json():
+    if not os.path.exists(PORTFOLIO_JSON):
+        return None, None
+
+    with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
+        portfolio = json.load(f)
+
+    with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
+        summary = json.load(f)
+
+    return portfolio, summary
+
+
+# -----------------------------
+# Excel アップロード → 計算 → JSON 保存
+# -----------------------------
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     try:
@@ -104,13 +146,16 @@ async def upload(file: UploadFile = File(...)):
         # JSON に変換
         portfolio_json = df.to_dict(orient="records")
 
+        # ---- JSON 保存 ----
+        save_json(portfolio_json, summary_json)
+
         # ---- 最終レスポンス ----
         return {
             "filename": file.filename,
             "portfolio_rows": len(portfolio_json),
             "portfolio": portfolio_json,
             "summary": summary_json,
-            "message": "portfolio + summary calculated"
+            "message": "portfolio + summary calculated & saved"
         }
 
     except Exception as e:
@@ -120,51 +165,17 @@ async def upload(file: UploadFile = File(...)):
         )
 
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    return """
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Step4 Portfolio Price Test</title>
-<style>
-body { font-family: sans-serif; padding: 20px; }
-button { padding: 10px 20px; font-size: 16px; }
-pre { background: #f0f0f0; padding: 10px; white-space: pre-wrap; }
-</style>
-</head>
-<body>
+# -----------------------------
+# スマホ UI 用：保存された JSON を返す
+# -----------------------------
+@app.get("/data/get")
+async def get_data():
+    portfolio, summary = load_json()
 
-<h2>Step4: 株価取得 → 評価額 → 損益計算</h2>
-<input type="file" id="fileInput">
-<button onclick="upload()">アップロード</button>
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
 
-<h3>結果</h3>
-<pre id="result"></pre>
-
-<script>
-async function upload() {
-    const file = document.getElementById("fileInput").files[0];
-    if (!file) {
-        alert("ファイルを選択してください");
-        return;
+    return {
+        "portfolio": portfolio,
+        "summary": summary
     }
-
-    const formData = new FormData();
-    formData.append("file", file);
-
-    const res = await fetch("/upload", {
-        method: "POST",
-        body: formData
-    });
-
-    const data = await res.json();
-    document.getElementById("result").textContent =
-        JSON.stringify(data, null, 2);
-}
-</script>
-
-</body>
-</html>
-"""
