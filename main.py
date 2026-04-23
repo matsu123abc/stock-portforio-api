@@ -8,14 +8,11 @@ app = FastAPI()
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     try:
-        # Excel を BytesIO に変換
         contents = await file.read()
         excel_bytes = io.BytesIO(contents)
 
-        # Excel 読み込み
         xls = pd.ExcelFile(excel_bytes)
 
-        # portfolio シートを DataFrame として読み込み
         if "portfolio" not in xls.sheet_names:
             return JSONResponse(
                 status_code=400,
@@ -24,7 +21,9 @@ async def upload(file: UploadFile = File(...)):
 
         df_portfolio = pd.read_excel(xls, sheet_name="portfolio")
 
-        # DataFrame → JSON
+        # ★ NaN を空文字に変換（これが重要）
+        df_portfolio = df_portfolio.fillna("")
+
         portfolio_json = df_portfolio.to_dict(orient="records")
 
         return {
@@ -39,6 +38,7 @@ async def upload(file: UploadFile = File(...)):
             status_code=400,
             content={"error": f"Excel 読み込みエラー: {str(e)}"}
         )
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
