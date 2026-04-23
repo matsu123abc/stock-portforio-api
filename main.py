@@ -60,6 +60,31 @@ def load_json():
     return portfolio, summary
 
 # -----------------------------
+# Yahooニュース取得
+# -----------------------------
+def fetch_yahoo_news(ticker):
+    try:
+        # 例: 3778.T → https://finance.yahoo.co.jp/quote/3778.T/news
+        url = f"https://finance.yahoo.co.jp/quote/{ticker}/news"
+        html = requests.get(url, timeout=5).text
+        soup = BeautifulSoup(html, "lxml")
+
+        # Yahooニュースのタイトル抽出
+        # aタグのクラスは頻繁に変わるので、汎用的に書く
+        news = []
+        for a in soup.find_all("a"):
+            text = a.get_text(strip=True)
+            if text and len(text) > 10:  # ノイズ除去
+                news.append(text)
+
+        # 上位3件だけ返す
+        return news[:3]
+
+    except Exception as e:
+        return []
+
+
+# -----------------------------
 # AI コメント生成
 # -----------------------------
 def generate_ai_comment(item):
@@ -78,14 +103,24 @@ def generate_ai_comment(item):
     pe_ratio = info.get("trailingPE", "")
     eps = info.get("trailingEps", "")
 
-    # --- ニュース取得（株探） ---
+    # --- ニュース取得（Yahoo!ニュース） ---
     try:
-        url = f"https://kabutan.jp/stock/news?code={ticker.replace('.T','')}"
+        url = f"https://finance.yahoo.co.jp/quote/{ticker}/news"
         html = requests.get(url, timeout=5).text
         soup = BeautifulSoup(html, "lxml")
-        news_list = [n.text.strip() for n in soup.select(".news_item a")][:3]
-        news_text = "\n".join(news_list)
-    except:
+
+        # Yahooニュースのタイトル抽出（汎用的に）
+        news_list = []
+        for a in soup.find_all("a"):
+            text = a.get_text(strip=True)
+            # ノイズ除去：短すぎるものは除外
+            if text and len(text) > 12:
+                news_list.append(text)
+
+        # 上位3件だけ使用
+        news_text = "\n".join(news_list[:3]) if news_list else "個別ニュースは見つかりませんでした。"
+
+    except Exception as e:
         news_text = "ニュース取得に失敗しました"
 
     # --- AI プロンプト ---
@@ -115,7 +150,7 @@ EPS: {eps}
 【会社概要】
 {company_summary}
 
-【最新ニュース（株探）】
+【最新ニュース（Yahoo!ニュース）】
 {news_text}
 
 【出力形式】
