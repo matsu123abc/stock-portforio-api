@@ -1,14 +1,19 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, JSONResponse
 import pandas as pd
+import io
 
 app = FastAPI()
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     try:
+        # SpooledTemporaryFile → BytesIO に変換
+        contents = await file.read()
+        excel_bytes = io.BytesIO(contents)
+
         # Excel を読み込む
-        xls = pd.ExcelFile(file.file)
+        xls = pd.ExcelFile(excel_bytes)
         sheet_names = xls.sheet_names
 
         return {
