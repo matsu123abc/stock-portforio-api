@@ -2,8 +2,4 @@ fastapi
 uvicorn
 pandas
 openpyxl
-yfinance
-python-dotenv
-openai
-requests
-xlsxwriter
+
