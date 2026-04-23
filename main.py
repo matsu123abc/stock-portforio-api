@@ -317,9 +317,22 @@ async def mobile():
                             </div>
 
                             <!-- AI コメント表示 -->
-                            <div style="margin-top:10px; padding:8px; background:#eef; border-radius:6px;">
+                            <div style="
+                                margin-top:10px;
+                                padding:10px;
+                                background:#eef;
+                                border-radius:6px;
+                                max-height:none;
+                                overflow-wrap:break-word;
+                                white-space:pre-wrap;
+                            ">
                                 <b>AI コメント</b><br>
-                                <div style="white-space:pre-wrap; font-size:14px;">
+                                <div style="
+                                    font-size:14px;
+                                    line-height:1.5;
+                                    white-space:pre-wrap;
+                                    overflow-wrap:break-word;
+                                ">
                                     ${item.ai_comment ? item.ai_comment : "（コメントなし）"}
                                 </div>
                             </div>
