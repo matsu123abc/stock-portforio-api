@@ -43,13 +43,14 @@ def save_json(portfolio, summary):
 # JSON 読み込み
 # -----------------------------
 def load_json():
-    if not os.path.exists("portfolio.json") or not os.path.exists("summary.json"):
+    # 正しいパスを参照する
+    if not os.path.exists(PORTFOLIO_JSON) or not os.path.exists(SUMMARY_JSON):
         return None, None
 
-    with open("portfolio.json", "r", encoding="utf-8") as f:
+    with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
         portfolio = json.load(f)
 
-    with open("summary.json", "r", encoding="utf-8") as f:
+    with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
         summary = json.load(f)
 
     # ai_summary_comment が無ければ追加
@@ -57,6 +58,7 @@ def load_json():
         summary["ai_summary_comment"] = ""
 
     return portfolio, summary
+
 
 # -----------------------------
 # Excel アップロード → 計算 → JSON 保存
