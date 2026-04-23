@@ -43,17 +43,20 @@ def save_json(portfolio, summary):
 # JSON 読み込み
 # -----------------------------
 def load_json():
-    if not os.path.exists(PORTFOLIO_JSON):
+    if not os.path.exists("portfolio.json") or not os.path.exists("summary.json"):
         return None, None
 
-    with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
+    with open("portfolio.json", "r", encoding="utf-8") as f:
         portfolio = json.load(f)
 
-    with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
+    with open("summary.json", "r", encoding="utf-8") as f:
         summary = json.load(f)
 
-    return portfolio, summary
+    # ai_summary_comment が無ければ追加
+    if "ai_summary_comment" not in summary:
+        summary["ai_summary_comment"] = ""
 
+    return portfolio, summary
 
 # -----------------------------
 # Excel アップロード → 計算 → JSON 保存
@@ -263,11 +266,19 @@ async def mobile():
             🤖 AI コメントを更新する
         </button>
 
+        <button onclick="updateAISummary()" style="background:#3f51b5; width:100%; margin-bottom:20px;">
+            📘 AI 統括コメントを更新する
+        </button>
+
         <!-- Summary 表示エリア -->
         <div class="summary-box" id="summary">
             Summary を読み込み中...
         </div>
 
+        <div class="summary-box" id="ai_summary">
+            AI統括コメントを読み込み中...
+        </div>
+        
         <!-- 銘柄一覧 -->
         <div id="list">読み込み中...</div>
 
@@ -344,6 +355,13 @@ async def mobile():
                     `;
                 });
 
+                document.getElementById('ai_summary').innerHTML = `
+                    <div class="summary-title">🤖 AI 統括コメント</div>
+                    <div style="white-space:pre-wrap; line-height:1.5;">
+                        ${data.summary.ai_summary_comment || "（まだ生成されていません）"}
+                    </div>
+                `;
+
                 document.getElementById('list').innerHTML = html;
             }
 
@@ -372,6 +390,19 @@ async def mobile():
                 }
 
                 alert("AI コメントを更新しました！");
+                loadData();
+            }
+
+            async function updateAISummary() {
+                const res = await fetch('/update_ai_summary', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                alert("AI 統括コメントを更新しました！");
                 loadData();
             }
 
@@ -518,4 +549,61 @@ async def update_ai_comment():
     return {
         "message": "AI コメントを更新しました",
         "portfolio": updated_portfolio
+    }
+
+@app.post("/update_ai_summary")
+async def update_ai_summary():
+    portfolio, summary = load_json()
+
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
+
+    # ポートフォリオ全体を AI に渡す
+    prompt = f"""
+あなたはプロの投資アナリストです。
+以下のポートフォリオ全体を分析し、総合的な戦略コメントを作成してください。
+
+【ポートフォリオ概要】
+投資額: {summary['invested_amount']:,} 円
+評価額: {summary['portfolio_value']:,} 円
+損益: {summary['total_profit']:,} 円
+損益率: {summary['total_profit_rate']*100:.2f} %
+残りキャッシュ: {summary['remaining_cash']:,} 円
+目標達成率: {summary['progress_to_target']*100:.2f} %
+
+【銘柄一覧】
+{json.dumps(portfolio, ensure_ascii=False, indent=2)}
+
+【出力形式】
+### 総合評価
+（全体の状況を簡潔に）
+
+### 今後の戦略
+（買い増し・利益確定・リバランスなど）
+
+### 注意点
+（市場リスク、セクターリスクなど）
+"""
+
+    try:
+        res = client.chat.completions.create(
+            model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1500
+        )
+        ai_summary = res.choices[0].message.content.strip()
+
+    except Exception as e:
+        ai_summary = f"AI 統括コメント生成エラー: {str(e)}"
+
+    # summary に追加
+    summary["ai_summary_comment"] = ai_summary
+
+    # 保存
+    save_json(portfolio, summary)
+
+    return {
+        "message": "AI 統括コメントを更新しました",
+        "summary": summary
     }
