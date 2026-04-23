@@ -8,18 +8,30 @@ app = FastAPI()
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     try:
-        # SpooledTemporaryFile → BytesIO に変換
+        # Excel を BytesIO に変換
         contents = await file.read()
         excel_bytes = io.BytesIO(contents)
 
-        # Excel を読み込む
+        # Excel 読み込み
         xls = pd.ExcelFile(excel_bytes)
-        sheet_names = xls.sheet_names
+
+        # portfolio シートを DataFrame として読み込み
+        if "portfolio" not in xls.sheet_names:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "portfolio シートが見つかりません"}
+            )
+
+        df_portfolio = pd.read_excel(xls, sheet_name="portfolio")
+
+        # DataFrame → JSON
+        portfolio_json = df_portfolio.to_dict(orient="records")
 
         return {
             "filename": file.filename,
-            "sheet_names": sheet_names,
-            "message": "Excel loaded successfully"
+            "portfolio_rows": len(portfolio_json),
+            "portfolio": portfolio_json,
+            "message": "portfolio sheet loaded successfully"
         }
 
     except Exception as e:
@@ -35,7 +47,7 @@ async def index():
 <html lang="ja">
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Step2 Excel Sheet Test</title>
+<title>Step3 Portfolio Sheet Test</title>
 <style>
 body { font-family: sans-serif; padding: 20px; }
 button { padding: 10px 20px; font-size: 16px; }
@@ -44,7 +56,7 @@ pre { background: #f0f0f0; padding: 10px; white-space: pre-wrap; }
 </head>
 <body>
 
-<h2>Step2: Excel のシート名を確認</h2>
+<h2>Step3: portfolio シートの内容を確認</h2>
 <input type="file" id="fileInput">
 <button onclick="upload()">アップロード</button>
 
