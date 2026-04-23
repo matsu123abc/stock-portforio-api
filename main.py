@@ -5,8 +5,18 @@ import io
 import yfinance as yf
 import os
 import json
+from openai import AzureOpenAI
 
 app = FastAPI()
+
+# ============================
+# Azure OpenAI クライアント
+# ============================
+client = AzureOpenAI(
+    api_key=os.getenv("AZURE_OPENAI_API_KEY"),
+    api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
+    azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
+)
 
 # -----------------------------
 # JSON 保存用ディレクトリ
@@ -249,6 +259,10 @@ async def mobile():
         🔄 株価を更新する
         </button>
 
+        <button onclick="updateAI()" style="background:#673ab7; width:100%; margin-bottom:20px;">
+            🤖 AI コメントを更新する
+        </button>
+
         <!-- Summary 表示エリア -->
         <div class="summary-box" id="summary">
             Summary を読み込み中...
@@ -333,6 +347,19 @@ async def mobile():
 
                 alert("株価を更新しました！");
                 loadData();  // 再読み込み
+            }
+
+            async function updateAI() {
+                const res = await fetch('/update_ai_comment', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.error) {
+                    alert(data.error);
+                    return;
+                }
+
+                alert("AI コメントを更新しました！");
+                loadData();
             }
 
         </script>
@@ -426,4 +453,56 @@ async def update_prices():
         "message": "株価を更新しました",
         "portfolio": portfolio_new,
         "summary": summary_new
+    }
+
+@app.post("/update_ai_comment")
+async def update_ai_comment():
+    portfolio, summary = load_json()
+
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
+
+    updated_portfolio = []
+
+    for item in portfolio:
+        prompt = f"""
+あなたはプロの投資アナリストです。
+以下の銘柄について、短く・実用的な戦略コメントを作成してください。
+
+【銘柄情報】
+ティッカー: {item['ticker']}
+銘柄名: {item['name']}
+購入単価: {item['cost']}
+株数: {item['shares']}
+現在値: {item['current_price']}
+損益: {item['profit']}
+損益率: {item['profit_rate']}
+
+【出力形式】
+- 現状の評価
+- 今後の戦略（買い増し / ホールド / 利益確定）
+- 注意点
+"""
+
+        try:
+            res = client.chat.completions.create(
+                model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+                max_tokens=200
+            )
+            ai_comment = res.choices[0].message.content.strip()
+
+        except Exception as e:
+            ai_comment = f"AI コメント生成エラー: {str(e)}"
+
+        item["ai_comment"] = ai_comment
+        updated_portfolio.append(item)
+
+    # JSON 保存
+    save_json(updated_portfolio, summary)
+
+    return {
+        "message": "AI コメントを更新しました",
+        "portfolio": updated_portfolio
     }
