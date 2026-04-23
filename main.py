@@ -197,3 +197,83 @@ async def index():
         </body>
     </html>
     """
+
+@app.get("/mobile", response_class=HTMLResponse)
+async def mobile():
+    return """
+    <html>
+    <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body { font-family: sans-serif; padding: 10px; }
+            .card {
+                border: 1px solid #ccc;
+                padding: 10px;
+                margin-bottom: 10px;
+                border-radius: 8px;
+            }
+            .title { font-size: 18px; font-weight: bold; }
+            .profit-positive { color: green; }
+            .profit-negative { color: red; }
+            button {
+                padding: 6px 12px;
+                margin-right: 5px;
+                border-radius: 6px;
+                border: none;
+                background: #007bff;
+                color: white;
+            }
+            .add-btn {
+                background: #28a745;
+                width: 100%;
+                margin-top: 20px;
+            }
+        </style>
+    </head>
+    <body>
+
+        <h2>📈 ポートフォリオ一覧</h2>
+        <div id="list">読み込み中...</div>
+
+        <button class="add-btn" onclick="alert('追加画面は Step9 で実装します')">
+            ＋ 銘柄を追加
+        </button>
+
+        <script>
+            async function loadData() {
+                const res = await fetch('/data/get');
+                const data = await res.json();
+
+                if (data.error) {
+                    document.getElementById('list').innerHTML = data.error;
+                    return;
+                }
+
+                let html = "";
+                data.portfolio.forEach(item => {
+                    const profitClass = item.profit >= 0 ? "profit-positive" : "profit-negative";
+                    const profitText = item.profit.toLocaleString();
+
+                    html += `
+                        <div class="card">
+                            <div class="title">[${item.ticker}] ${item.name}</div>
+                            <div>購入単価: ${item.cost} / 株数: ${item.shares}</div>
+                            <div>購入日: ${item.buy_date}</div>
+                            <div class="${profitClass}">
+                                損益: ${profitText} 円
+                            </div>
+                            <button onclick="alert('編集は Step9 で実装します')">編集</button>
+                            <button onclick="alert('削除は Step9 で実装します')">削除</button>
+                        </div>
+                    `;
+                });
+
+                document.getElementById('list').innerHTML = html;
+            }
+
+            loadData();
+        </script>
+
+    </body>
+    </html>
+    """
