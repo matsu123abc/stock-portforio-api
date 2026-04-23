@@ -228,11 +228,29 @@ async def mobile():
                 width: 100%;
                 margin-top: 20px;
             }
+            .summary-box {
+                background: #f5f5f5;
+                padding: 12px;
+                border-radius: 8px;
+                margin-bottom: 20px;
+            }
+            .summary-title {
+                font-size: 20px;
+                font-weight: bold;
+                margin-bottom: 10px;
+            }
         </style>
     </head>
     <body>
 
         <h2>📈 ポートフォリオ一覧</h2>
+
+        <!-- Summary 表示エリア -->
+        <div class="summary-box" id="summary">
+            Summary を読み込み中...
+        </div>
+
+        <!-- 銘柄一覧 -->
         <div id="list">読み込み中...</div>
 
         <button class="add-btn" onclick="alert('追加画面は Step9 で実装します')">
@@ -246,9 +264,24 @@ async def mobile():
 
                 if (data.error) {
                     document.getElementById('list').innerHTML = data.error;
+                    document.getElementById('summary').innerHTML = "";
                     return;
                 }
 
+                // ---- Summary 表示 ----
+                const s = data.summary;
+                document.getElementById('summary').innerHTML = `
+                    <div class="summary-title">📊 Summary</div>
+                    <div>投資枠: ${s.total_investment_frame.toLocaleString()} 円</div>
+                    <div>投資額: ${s.invested_amount.toLocaleString()} 円</div>
+                    <div>評価額: ${s.portfolio_value.toLocaleString()} 円</div>
+                    <div>損益: ${s.total_profit.toLocaleString()} 円</div>
+                    <div>損益率: ${(s.total_profit_rate * 100).toFixed(2)} %</div>
+                    <div>残りキャッシュ: ${s.remaining_cash.toLocaleString()} 円</div>
+                    <div>目標達成率: ${(s.progress_to_target * 100).toFixed(2)} %</div>
+                `;
+
+                // ---- 銘柄一覧 ----
                 let html = "";
                 data.portfolio.forEach(item => {
                     const profitClass = item.profit >= 0 ? "profit-positive" : "profit-negative";
