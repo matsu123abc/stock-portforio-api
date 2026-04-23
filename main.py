@@ -143,6 +143,10 @@ async def upload(file: UploadFile = File(...)):
         # ---- NaN を空文字に変換 ----
         df = df.fillna("")
 
+        # ---- buy_date を文字列に変換（重要）----
+        if "buy_date" in df.columns:
+            df["buy_date"] = df["buy_date"].astype(str)
+
         # JSON に変換
         portfolio_json = df.to_dict(orient="records")
 
