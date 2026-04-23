@@ -179,3 +179,17 @@ async def get_data():
         "portfolio": portfolio,
         "summary": summary
     }
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return """
+    <html>
+        <body>
+            <h2>Excel アップロード</h2>
+            <form action="/upload" enctype="multipart/form-data" method="post">
+                <input name="file" type="file" />
+                <button type="submit">アップロード</button>
+            </form>
+        </body>
+    </html>
+    """
