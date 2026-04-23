@@ -22,6 +22,7 @@ async def upload(file: UploadFile = File(...)):
                 content={"error": "portfolio シートが見つかりません"}
             )
 
+        # ---- portfolio 読み込み ----
         df = pd.read_excel(xls, sheet_name="portfolio")
 
         # 株価取得と計算
@@ -68,17 +69,50 @@ async def upload(file: UploadFile = File(...)):
         df["profit"] = profits
         df["profit_rate"] = profit_rates
 
-        # NaN を空文字に変換
+        # ---- summary 計算 ----
+        if "summary" in xls.sheet_names:
+            df_summary = pd.read_excel(xls, sheet_name="summary")
+
+            # Excel から固定値を取得
+            total_investment_frame = int(df_summary.loc[df_summary["item"] == "total_investment_frame", "value"].values[0])
+            annual_target_profit = int(df_summary.loc[df_summary["item"] == "annual_target_profit", "value"].values[0])
+        else:
+            # summary シートが無い場合のデフォルト
+            total_investment_frame = 10000000
+            annual_target_profit = 3000000
+
+        # portfolio の集計
+        invested_amount = (df["cost"] * df["shares"]).sum()
+        portfolio_value = df["value"].replace("", 0).sum()
+        total_profit = portfolio_value - invested_amount
+        total_profit_rate = total_profit / invested_amount if invested_amount > 0 else 0
+        remaining_cash = total_investment_frame - invested_amount
+        progress_to_target = total_profit / annual_target_profit if annual_target_profit > 0 else 0
+
+        summary_json = {
+            "total_investment_frame": total_investment_frame,
+            "invested_amount": invested_amount,
+            "portfolio_value": portfolio_value,
+            "total_profit": total_profit,
+            "total_profit_rate": total_profit_rate,
+            "remaining_cash": remaining_cash,
+            "annual_target_profit": annual_target_profit,
+            "progress_to_target": progress_to_target
+        }
+
+        # ---- NaN を空文字に変換 ----
         df = df.fillna("")
 
         # JSON に変換
         portfolio_json = df.to_dict(orient="records")
 
+        # ---- 最終レスポンス ----
         return {
             "filename": file.filename,
             "portfolio_rows": len(portfolio_json),
             "portfolio": portfolio_json,
-            "message": "portfolio with prices calculated"
+            "summary": summary_json,
+            "message": "portfolio + summary calculated"
         }
 
     except Exception as e:
