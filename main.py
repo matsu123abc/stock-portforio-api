@@ -71,40 +71,24 @@ def fetch_news_for_ticker(ticker, name):
 
     return articles[:3]
 
-
 def extract_news_body(url: str):
-    """
-    ニュースURLから本文を抽出する
-    """
     try:
         r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        r.raise_for_status()
-
         soup = BeautifulSoup(r.text, "html.parser")
-
-        # pタグを全部つなげる（最も汎用的）
         paragraphs = soup.find_all("p")
         text = "\n".join([p.get_text().strip() for p in paragraphs])
-        text = "\n".join([line for line in text.split("\n") if line.strip()])
-
         return text if text else "本文を抽出できませんでした。"
-
-    except Exception:
+    except:
         return "本文抽出エラー"
 
-
 def summarize_news_body(body: str):
-    """
-    ニュース本文を GPT で要約する
-    """
     prompt = f"""
-以下のニュース本文を、投資家向けに5〜7行で要約してください。
+以下のニュース本文を投資家向けに5〜7行で要約してください。
 重要ポイントだけを抽出し、企業・業界・株価に関係する部分を中心にまとめてください。
 
 【ニュース本文】
 {body}
 """
-
     try:
         res = client.chat.completions.create(
             model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
@@ -112,10 +96,8 @@ def summarize_news_body(body: str):
             temperature=0.2,
         )
         return res.choices[0].message.content.strip()
-
-    except Exception:
+    except:
         return "ニュース要約に失敗しました。"
-
 
 # -----------------------------
 # JSON 保存用ディレクトリ
@@ -494,12 +476,21 @@ async def update_ai_comment():
     updated_portfolio = []
 
     for item in portfolio:
-        try:
-            item["ai_comment"] = generate_ai_comment(item)
-        except Exception as e:
-            item["ai_comment"] = f"AI コメント生成エラー: {str(e)}"
 
-        updated_portfolio.append(item)
+        # --- ニュース取得 ---
+        articles = fetch_news_for_ticker(item["ticker"], item["name"])
+
+        if articles:
+            url = articles[0]["link"]
+            body = extract_news_body(url)
+            summary = summarize_news_body(body)
+        else:
+            summary = "ニュースが見つかりませんでした。"
+
+        item["news_summary"] = summary
+
+        # --- AI コメント ---
+        item["ai_comment"] = generate_ai_comment(item)
 
     save_json(updated_portfolio, summary)
 
@@ -713,6 +704,17 @@ async def mobile():
 
                             <div class="${profitClass}">
                                 損益: ${profitText} 円
+                            </div>
+
+                            <div style="
+                                margin-top:10px;
+                                padding:10px;
+                                background:#ffe;
+                                border-radius:6px;
+                                white-space:pre-wrap;
+                            ">
+                                <b>📰 ニュース要約</b><br>
+                                ${item.news_summary ? item.news_summary : "（ニュースなし）"}
                             </div>
 
                             <!-- AI コメント表示 -->
