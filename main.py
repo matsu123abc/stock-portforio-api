@@ -477,20 +477,29 @@ async def update_ai_comment():
 
     for item in portfolio:
 
-        # --- ニュース取得 ---
+        # --- ニュース取得（SerpAPI） ---
         articles = fetch_news_for_ticker(item["ticker"], item["name"])
 
-        if articles:
+        if articles and articles[0].get("link"):
             url = articles[0]["link"]
-            body = extract_news_body(url)
-            summary = summarize_news_body(body)
-        else:
-            summary = "ニュースが見つかりませんでした。"
 
-        item["news_summary"] = summary
+            # 本文抽出
+            body = extract_news_body(url)
+
+            # 本文要約
+            summary_text = summarize_news_body(body)
+
+            item["news_summary"] = summary_text
+        else:
+            item["news_summary"] = "ニュースが見つかりませんでした。"
 
         # --- AI コメント ---
-        item["ai_comment"] = generate_ai_comment(item)
+        try:
+            item["ai_comment"] = generate_ai_comment(item)
+        except Exception as e:
+            item["ai_comment"] = f"AI コメント生成エラー: {str(e)}"
+
+        updated_portfolio.append(item)
 
     save_json(updated_portfolio, summary)
 
@@ -498,7 +507,6 @@ async def update_ai_comment():
         "message": "AI コメントを更新しました",
         "portfolio": updated_portfolio
     }
-
 
 # -----------------------------
 # update_ai_summary（元のまま）
