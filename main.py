@@ -5,6 +5,8 @@ import io
 import yfinance as yf
 import os
 import json
+import requests
+from bs4 import BeautifulSoup
 from openai import AzureOpenAI
 
 app = FastAPI()
@@ -17,6 +19,52 @@ client = AzureOpenAI(
     api_version=os.getenv("AZURE_OPENAI_API_VERSION"),
     azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT")
 )
+
+# ============================
+# SerpAPI（Google News）
+# ============================
+SERPER_API_KEY = os.getenv("SERPER_API_KEY")
+
+def fetch_news_for_ticker(ticker, name):
+    """
+    Google News（SerpAPI）でニュースを取得する
+    """
+    url = "https://serpapi.com/search"
+    params = {
+        "engine": "google",
+        "q": f"{name} {ticker} ニュース",
+        "api_key": SERPER_API_KEY,
+        "num": 5
+    }
+
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+    except:
+        return ["ニュース取得エラー"]
+
+    articles = []
+
+    def safe(v):
+        return v if v else ""
+
+    # top_stories
+    if "top_stories" in data:
+        for item in data["top_stories"]:
+            articles.append(safe(item.get("title")))
+
+    # organic_results
+    if "organic_results" in data:
+        for item in data["organic_results"]:
+            articles.append(safe(item.get("title")))
+
+    # news_results
+    if "news_results" in data:
+        for item in data["news_results"]:
+            articles.append(safe(item.get("title")))
+
+    return articles[:3] if articles else ["ニュースが見つかりませんでした。"]
+
 
 # -----------------------------
 # JSON 保存用ディレクトリ
@@ -43,7 +91,6 @@ def save_json(portfolio, summary):
 # JSON 読み込み
 # -----------------------------
 def load_json():
-    # 正しいパスを参照する
     if not os.path.exists(PORTFOLIO_JSON) or not os.path.exists(SUMMARY_JSON):
         return None, None
 
@@ -53,39 +100,14 @@ def load_json():
     with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
         summary = json.load(f)
 
-    # ai_summary_comment が無ければ追加
     if "ai_summary_comment" not in summary:
         summary["ai_summary_comment"] = ""
 
     return portfolio, summary
 
-# -----------------------------
-# Yahooニュース取得
-# -----------------------------
-def fetch_yahoo_news(ticker):
-    try:
-        # 例: 3778.T → https://finance.yahoo.co.jp/quote/3778.T/news
-        url = f"https://finance.yahoo.co.jp/quote/{ticker}/news"
-        html = requests.get(url, timeout=5).text
-        soup = BeautifulSoup(html, "lxml")
-
-        # Yahooニュースのタイトル抽出
-        # aタグのクラスは頻繁に変わるので、汎用的に書く
-        news = []
-        for a in soup.find_all("a"):
-            text = a.get_text(strip=True)
-            if text and len(text) > 10:  # ノイズ除去
-                news.append(text)
-
-        # 上位3件だけ返す
-        return news[:3]
-
-    except Exception as e:
-        return []
-
 
 # -----------------------------
-# AI コメント生成
+# AI コメント生成（SerpAPI ニュース版）
 # -----------------------------
 def generate_ai_comment(item):
     ticker = item["ticker"]
@@ -103,25 +125,9 @@ def generate_ai_comment(item):
     pe_ratio = info.get("trailingPE", "")
     eps = info.get("trailingEps", "")
 
-    # --- ニュース取得（Yahoo!ニュース） ---
-    try:
-        url = f"https://finance.yahoo.co.jp/quote/{ticker}/news"
-        html = requests.get(url, timeout=5).text
-        soup = BeautifulSoup(html, "lxml")
-
-        # Yahooニュースのタイトル抽出（汎用的に）
-        news_list = []
-        for a in soup.find_all("a"):
-            text = a.get_text(strip=True)
-            # ノイズ除去：短すぎるものは除外
-            if text and len(text) > 12:
-                news_list.append(text)
-
-        # 上位3件だけ使用
-        news_text = "\n".join(news_list[:3]) if news_list else "個別ニュースは見つかりませんでした。"
-
-    except Exception as e:
-        news_text = "ニュース取得に失敗しました"
+    # --- ニュース取得（SerpAPI） ---
+    news_list = fetch_news_for_ticker(item["ticker"], item["name"])
+    news_text = "\n".join(news_list)
 
     # --- AI プロンプト ---
     prompt = f"""
@@ -150,7 +156,7 @@ EPS: {eps}
 【会社概要】
 {company_summary}
 
-【最新ニュース（Yahoo!ニュース）】
+【最新ニュース（Google News）】
 {news_text}
 
 【出力形式】
@@ -172,7 +178,6 @@ EPS: {eps}
     )
 
     return res.choices[0].message.content.strip()
-
 
 # -----------------------------
 # Excel アップロード → 計算 → JSON 保存
@@ -297,6 +302,203 @@ async def upload(file: UploadFile = File(...)):
             content={"error": f"Excel 読み込みエラー: {str(e)}"}
         )
 
+# -----------------------------
+# update_prices（省略：元のまま）
+# -----------------------------
+@app.post("/update_prices")
+async def update_prices():
+    portfolio, summary = load_json()
+
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
+
+    # DataFrame に戻す
+    df = pd.DataFrame(portfolio)
+
+    current_prices = []
+    values = []
+    profits = []
+    profit_rates = []
+
+    for idx, row in df.iterrows():
+        ticker = str(row["ticker"])
+
+        # --- 株価取得（1日 → 5日 fallback） ---
+        price = None
+        try:
+            hist = yf.Ticker(ticker).history(period="1d")
+            if len(hist) > 0:
+                price = hist["Close"].iloc[-1]
+        except:
+            price = None
+
+        # 1日データが取れない場合は5日データ
+        if price is None:
+            try:
+                hist = yf.Ticker(ticker).history(period="5d")
+                if len(hist) > 0:
+                    price = hist["Close"].iloc[-1]
+            except:
+                price = None
+
+        # --- ★ 前回値を使う（最重要） ---
+        if price is None:
+            price = row.get("current_price", None)
+
+        current_prices.append(price)
+
+        # --- 評価額 ---
+        if price is not None:
+            value = price * row["shares"]
+        else:
+            value = None
+        values.append(value)
+
+        # --- 損益 ---
+        if value is not None:
+            profit = value - (row["cost"] * row["shares"])
+        else:
+            profit = None
+        profits.append(profit)
+
+        # --- 損益率 ---
+        if profit is not None:
+            profit_rate = profit / (row["cost"] * row["shares"])
+        else:
+            profit_rate = None
+        profit_rates.append(profit_rate)
+
+    # DataFrame に反映
+    df["current_price"] = current_prices
+    df["value"] = values
+    df["profit"] = profits
+    df["profit_rate"] = profit_rates
+
+    # --- summary 再計算 ---
+    invested_amount = int((df["cost"] * df["shares"]).sum())
+    portfolio_value = float(df["value"].replace("", 0).sum())
+    total_profit = float(portfolio_value - invested_amount)
+    total_profit_rate = float(total_profit / invested_amount) if invested_amount > 0 else 0.0
+
+    total_investment_frame = summary["total_investment_frame"]
+    annual_target_profit = summary["annual_target_profit"]
+
+    remaining_cash = int(total_investment_frame - invested_amount)
+    progress_to_target = float(total_profit / annual_target_profit)
+
+    summary_new = {
+        "total_investment_frame": total_investment_frame,
+        "invested_amount": invested_amount,
+        "portfolio_value": portfolio_value,
+        "total_profit": total_profit,
+        "total_profit_rate": total_profit_rate,
+        "remaining_cash": remaining_cash,
+        "annual_target_profit": annual_target_profit,
+        "progress_to_target": progress_to_target
+    }
+
+    # buy_date を文字列化
+    if "buy_date" in df.columns:
+        df["buy_date"] = df["buy_date"].astype(str)
+
+    portfolio_new = df.fillna("").to_dict(orient="records")
+
+    # JSON 保存
+    save_json(portfolio_new, summary_new)
+
+    return {
+        "message": "株価を更新しました",
+        "portfolio": portfolio_new,
+        "summary": summary_new
+    }
+
+# -----------------------------
+# AI コメント更新（generate_ai_comment を使用）
+# -----------------------------
+@app.post("/update_ai_comment")
+async def update_ai_comment():
+    portfolio, summary = load_json()
+
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
+
+    updated_portfolio = []
+
+    for item in portfolio:
+        try:
+            item["ai_comment"] = generate_ai_comment(item)
+        except Exception as e:
+            item["ai_comment"] = f"AI コメント生成エラー: {str(e)}"
+
+        updated_portfolio.append(item)
+
+    save_json(updated_portfolio, summary)
+
+    return {
+        "message": "AI コメントを更新しました",
+        "portfolio": updated_portfolio
+    }
+
+
+# -----------------------------
+# update_ai_summary（元のまま）
+# -----------------------------
+@app.post("/update_ai_summary")
+async def update_ai_summary():
+    portfolio, summary = load_json()
+
+    if portfolio is None:
+        return {"error": "まだデータが保存されていません"}
+
+    # ポートフォリオ全体を AI に渡す
+    prompt = f"""
+あなたはプロの投資アナリストです。
+以下のポートフォリオ全体を分析し、総合的な戦略コメントを作成してください。
+
+【ポートフォリオ概要】
+投資額: {summary['invested_amount']:,} 円
+評価額: {summary['portfolio_value']:,} 円
+損益: {summary['total_profit']:,} 円
+損益率: {summary['total_profit_rate']*100:.2f} %
+残りキャッシュ: {summary['remaining_cash']:,} 円
+目標達成率: {summary['progress_to_target']*100:.2f} %
+
+【銘柄一覧】
+{json.dumps(portfolio, ensure_ascii=False, indent=2)}
+
+【出力形式】
+### 総合評価
+（全体の状況を簡潔に）
+
+### 今後の戦略
+（買い増し・利益確定・リバランスなど）
+
+### 注意点
+（市場リスク、セクターリスクなど）
+"""
+
+    try:
+        res = client.chat.completions.create(
+            model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1500
+        )
+        ai_summary = res.choices[0].message.content.strip()
+
+    except Exception as e:
+        ai_summary = f"AI 統括コメント生成エラー: {str(e)}"
+
+    # summary に追加
+    summary["ai_summary_comment"] = ai_summary
+
+    # 保存
+    save_json(portfolio, summary)
+
+    return {
+        "message": "AI 統括コメントを更新しました",
+        "summary": summary
+    }
 
 # -----------------------------
 # スマホ UI 用：保存された JSON を返す
@@ -528,220 +730,3 @@ async def mobile():
     </body>
     </html>
     """
-
-@app.post("/update_prices")
-async def update_prices():
-    portfolio, summary = load_json()
-
-    if portfolio is None:
-        return {"error": "まだデータが保存されていません"}
-
-    # DataFrame に戻す
-    df = pd.DataFrame(portfolio)
-
-    current_prices = []
-    values = []
-    profits = []
-    profit_rates = []
-
-    for idx, row in df.iterrows():
-        ticker = str(row["ticker"])
-
-        # --- 株価取得（1日 → 5日 fallback） ---
-        price = None
-        try:
-            hist = yf.Ticker(ticker).history(period="1d")
-            if len(hist) > 0:
-                price = hist["Close"].iloc[-1]
-        except:
-            price = None
-
-        # 1日データが取れない場合は5日データ
-        if price is None:
-            try:
-                hist = yf.Ticker(ticker).history(period="5d")
-                if len(hist) > 0:
-                    price = hist["Close"].iloc[-1]
-            except:
-                price = None
-
-        # --- ★ 前回値を使う（最重要） ---
-        if price is None:
-            price = row.get("current_price", None)
-
-        current_prices.append(price)
-
-        # --- 評価額 ---
-        if price is not None:
-            value = price * row["shares"]
-        else:
-            value = None
-        values.append(value)
-
-        # --- 損益 ---
-        if value is not None:
-            profit = value - (row["cost"] * row["shares"])
-        else:
-            profit = None
-        profits.append(profit)
-
-        # --- 損益率 ---
-        if profit is not None:
-            profit_rate = profit / (row["cost"] * row["shares"])
-        else:
-            profit_rate = None
-        profit_rates.append(profit_rate)
-
-    # DataFrame に反映
-    df["current_price"] = current_prices
-    df["value"] = values
-    df["profit"] = profits
-    df["profit_rate"] = profit_rates
-
-    # --- summary 再計算 ---
-    invested_amount = int((df["cost"] * df["shares"]).sum())
-    portfolio_value = float(df["value"].replace("", 0).sum())
-    total_profit = float(portfolio_value - invested_amount)
-    total_profit_rate = float(total_profit / invested_amount) if invested_amount > 0 else 0.0
-
-    total_investment_frame = summary["total_investment_frame"]
-    annual_target_profit = summary["annual_target_profit"]
-
-    remaining_cash = int(total_investment_frame - invested_amount)
-    progress_to_target = float(total_profit / annual_target_profit)
-
-    summary_new = {
-        "total_investment_frame": total_investment_frame,
-        "invested_amount": invested_amount,
-        "portfolio_value": portfolio_value,
-        "total_profit": total_profit,
-        "total_profit_rate": total_profit_rate,
-        "remaining_cash": remaining_cash,
-        "annual_target_profit": annual_target_profit,
-        "progress_to_target": progress_to_target
-    }
-
-    # buy_date を文字列化
-    if "buy_date" in df.columns:
-        df["buy_date"] = df["buy_date"].astype(str)
-
-    portfolio_new = df.fillna("").to_dict(orient="records")
-
-    # JSON 保存
-    save_json(portfolio_new, summary_new)
-
-    return {
-        "message": "株価を更新しました",
-        "portfolio": portfolio_new,
-        "summary": summary_new
-    }
-
-@app.post("/update_ai_comment")
-async def update_ai_comment():
-    portfolio, summary = load_json()
-
-    if portfolio is None:
-        return {"error": "まだデータが保存されていません"}
-
-    updated_portfolio = []
-
-    for item in portfolio:
-        prompt = f"""
-あなたはプロの投資アナリストです。
-以下の銘柄について、短く・実用的な戦略コメントを作成してください。
-
-【銘柄情報】
-ティッカー: {item['ticker']}
-銘柄名: {item['name']}
-購入単価: {item['cost']}
-株数: {item['shares']}
-現在値: {item['current_price']}
-損益: {item['profit']}
-損益率: {item['profit_rate']}
-
-【出力形式】
-- 現状の評価
-- 今後の戦略（買い増し / ホールド / 利益確定）
-- 注意点
-"""
-
-        try:
-            res = client.chat.completions.create(
-                model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=1500
-            )
-            ai_comment = res.choices[0].message.content.strip()
-
-        except Exception as e:
-            ai_comment = f"AI コメント生成エラー: {str(e)}"
-
-        item["ai_comment"] = generate_ai_comment(item)
-        updated_portfolio.append(item)
-
-    # JSON 保存
-    save_json(updated_portfolio, summary)
-
-    return {
-        "message": "AI コメントを更新しました",
-        "portfolio": updated_portfolio
-    }
-
-@app.post("/update_ai_summary")
-async def update_ai_summary():
-    portfolio, summary = load_json()
-
-    if portfolio is None:
-        return {"error": "まだデータが保存されていません"}
-
-    # ポートフォリオ全体を AI に渡す
-    prompt = f"""
-あなたはプロの投資アナリストです。
-以下のポートフォリオ全体を分析し、総合的な戦略コメントを作成してください。
-
-【ポートフォリオ概要】
-投資額: {summary['invested_amount']:,} 円
-評価額: {summary['portfolio_value']:,} 円
-損益: {summary['total_profit']:,} 円
-損益率: {summary['total_profit_rate']*100:.2f} %
-残りキャッシュ: {summary['remaining_cash']:,} 円
-目標達成率: {summary['progress_to_target']*100:.2f} %
-
-【銘柄一覧】
-{json.dumps(portfolio, ensure_ascii=False, indent=2)}
-
-【出力形式】
-### 総合評価
-（全体の状況を簡潔に）
-
-### 今後の戦略
-（買い増し・利益確定・リバランスなど）
-
-### 注意点
-（市場リスク、セクターリスクなど）
-"""
-
-    try:
-        res = client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=1500
-        )
-        ai_summary = res.choices[0].message.content.strip()
-
-    except Exception as e:
-        ai_summary = f"AI 統括コメント生成エラー: {str(e)}"
-
-    # summary に追加
-    summary["ai_summary_comment"] = ai_summary
-
-    # 保存
-    save_json(portfolio, summary)
-
-    return {
-        "message": "AI 統括コメントを更新しました",
-        "summary": summary
-    }
-
