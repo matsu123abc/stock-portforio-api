@@ -26,9 +26,6 @@ client = AzureOpenAI(
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 def fetch_news_for_ticker(ticker, name):
-    """
-    Google News（SerpAPI）でニュースを取得する
-    """
     url = "https://serpapi.com/search"
     params = {
         "engine": "google",
@@ -41,7 +38,7 @@ def fetch_news_for_ticker(ticker, name):
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
     except:
-        return ["ニュース取得エラー"]
+        return []
 
     articles = []
 
@@ -51,19 +48,73 @@ def fetch_news_for_ticker(ticker, name):
     # top_stories
     if "top_stories" in data:
         for item in data["top_stories"]:
-            articles.append(safe(item.get("title")))
+            articles.append({
+                "title": safe(item.get("title")),
+                "link": safe(item.get("link"))
+            })
 
     # organic_results
     if "organic_results" in data:
         for item in data["organic_results"]:
-            articles.append(safe(item.get("title")))
+            articles.append({
+                "title": safe(item.get("title")),
+                "link": safe(item.get("link"))
+            })
 
     # news_results
     if "news_results" in data:
         for item in data["news_results"]:
-            articles.append(safe(item.get("title")))
+            articles.append({
+                "title": safe(item.get("title")),
+                "link": safe(item.get("link"))
+            })
 
-    return articles[:3] if articles else ["ニュースが見つかりませんでした。"]
+    return articles[:3]
+
+
+def extract_news_body(url: str):
+    """
+    ニュースURLから本文を抽出する
+    """
+    try:
+        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        r.raise_for_status()
+
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # pタグを全部つなげる（最も汎用的）
+        paragraphs = soup.find_all("p")
+        text = "\n".join([p.get_text().strip() for p in paragraphs])
+        text = "\n".join([line for line in text.split("\n") if line.strip()])
+
+        return text if text else "本文を抽出できませんでした。"
+
+    except Exception:
+        return "本文抽出エラー"
+
+
+def summarize_news_body(body: str):
+    """
+    ニュース本文を GPT で要約する
+    """
+    prompt = f"""
+以下のニュース本文を、投資家向けに5〜7行で要約してください。
+重要ポイントだけを抽出し、企業・業界・株価に関係する部分を中心にまとめてください。
+
+【ニュース本文】
+{body}
+"""
+
+    try:
+        res = client.chat.completions.create(
+            model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+        )
+        return res.choices[0].message.content.strip()
+
+    except Exception:
+        return "ニュース要約に失敗しました。"
 
 
 # -----------------------------
@@ -126,8 +177,23 @@ def generate_ai_comment(item):
     eps = info.get("trailingEps", "")
 
     # --- ニュース取得（SerpAPI） ---
-    news_list = fetch_news_for_ticker(item["ticker"], item["name"])
-    news_text = "\n".join(news_list)
+    articles = fetch_news_for_ticker(item["ticker"], item["name"])
+
+    if articles:
+        first = articles[0]
+        news_title = first["title"]
+        news_url = first["link"]
+
+        # 本文抽出
+        body = extract_news_body(news_url)
+
+        # 本文要約
+        body_summary = summarize_news_body(body)
+
+    else:
+        news_title = "ニュースなし"
+        body_summary = "ニュース要約なし"
+
 
     # --- AI プロンプト ---
     prompt = f"""
@@ -156,8 +222,11 @@ EPS: {eps}
 【会社概要】
 {company_summary}
 
-【最新ニュース（Google News）】
-{news_text}
+【最新ニュース】
+タイトル: {news_title}
+
+【ニュース本文要約】
+{body_summary}
 
 【出力形式】
 ### 現状の評価
