@@ -26,6 +26,9 @@ client = AzureOpenAI(
 SERPER_API_KEY = os.getenv("SERPER_API_KEY")
 
 def fetch_news_for_ticker(ticker, name):
+    """
+    Google News（SerpAPI）でニュースを取得する
+    """
     url = "https://serpapi.com/search"
     params = {
         "engine": "google",
@@ -38,7 +41,7 @@ def fetch_news_for_ticker(ticker, name):
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
     except:
-        return []
+        return ["ニュース取得エラー"]
 
     articles = []
 
@@ -48,56 +51,20 @@ def fetch_news_for_ticker(ticker, name):
     # top_stories
     if "top_stories" in data:
         for item in data["top_stories"]:
-            articles.append({
-                "title": safe(item.get("title")),
-                "link": safe(item.get("link"))
-            })
+            articles.append(safe(item.get("title")))
 
     # organic_results
     if "organic_results" in data:
         for item in data["organic_results"]:
-            articles.append({
-                "title": safe(item.get("title")),
-                "link": safe(item.get("link"))
-            })
+            articles.append(safe(item.get("title")))
 
     # news_results
     if "news_results" in data:
         for item in data["news_results"]:
-            articles.append({
-                "title": safe(item.get("title")),
-                "link": safe(item.get("link"))
-            })
+            articles.append(safe(item.get("title")))
 
-    return articles[:3]
+    return articles[:3] if articles else ["ニュースが見つかりませんでした。"]
 
-def extract_news_body(url: str):
-    try:
-        r = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        soup = BeautifulSoup(r.text, "html.parser")
-        paragraphs = soup.find_all("p")
-        text = "\n".join([p.get_text().strip() for p in paragraphs])
-        return text if text else "本文を抽出できませんでした。"
-    except:
-        return "本文抽出エラー"
-
-def summarize_news_body(body: str):
-    prompt = f"""
-以下のニュース本文を投資家向けに5〜7行で要約してください。
-重要ポイントだけを抽出し、企業・業界・株価に関係する部分を中心にまとめてください。
-
-【ニュース本文】
-{body}
-"""
-    try:
-        res = client.chat.completions.create(
-            model=os.getenv("AZURE_OPENAI_DEPLOYMENT"),
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-        )
-        return res.choices[0].message.content.strip()
-    except:
-        return "ニュース要約に失敗しました。"
 
 # -----------------------------
 # JSON 保存用ディレクトリ
@@ -159,23 +126,8 @@ def generate_ai_comment(item):
     eps = info.get("trailingEps", "")
 
     # --- ニュース取得（SerpAPI） ---
-    articles = fetch_news_for_ticker(item["ticker"], item["name"])
-
-    if articles:
-        first = articles[0]
-        news_title = first["title"]
-        news_url = first["link"]
-
-        # 本文抽出
-        body = extract_news_body(news_url)
-
-        # 本文要約
-        body_summary = summarize_news_body(body)
-
-    else:
-        news_title = "ニュースなし"
-        body_summary = "ニュース要約なし"
-
+    news_list = fetch_news_for_ticker(item["ticker"], item["name"])
+    news_text = "\n".join(news_list)
 
     # --- AI プロンプト ---
     prompt = f"""
@@ -204,11 +156,8 @@ EPS: {eps}
 【会社概要】
 {company_summary}
 
-【最新ニュース】
-タイトル: {news_title}
-
-【ニュース本文要約】
-{body_summary}
+【最新ニュース（Google News）】
+{news_text}
 
 【出力形式】
 ### 現状の評価
@@ -476,24 +425,6 @@ async def update_ai_comment():
     updated_portfolio = []
 
     for item in portfolio:
-
-        # --- ニュース取得（SerpAPI） ---
-        articles = fetch_news_for_ticker(item["ticker"], item["name"])
-
-        if articles and articles[0].get("link"):
-            url = articles[0]["link"]
-
-            # 本文抽出
-            body = extract_news_body(url)
-
-            # 本文要約
-            summary_text = summarize_news_body(body)
-
-            item["news_summary"] = summary_text
-        else:
-            item["news_summary"] = "ニュースが見つかりませんでした。"
-
-        # --- AI コメント ---
         try:
             item["ai_comment"] = generate_ai_comment(item)
         except Exception as e:
@@ -507,6 +438,7 @@ async def update_ai_comment():
         "message": "AI コメントを更新しました",
         "portfolio": updated_portfolio
     }
+
 
 # -----------------------------
 # update_ai_summary（元のまま）
@@ -712,17 +644,6 @@ async def mobile():
 
                             <div class="${profitClass}">
                                 損益: ${profitText} 円
-                            </div>
-
-                            <div style="
-                                margin-top:10px;
-                                padding:10px;
-                                background:#ffe;
-                                border-radius:6px;
-                                white-space:pre-wrap;
-                            ">
-                                <b>📰 ニュース要約</b><br>
-                                ${item.news_summary ? item.news_summary : "（ニュースなし）"}
                             </div>
 
                             <!-- AI コメント表示 -->
