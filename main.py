@@ -538,46 +538,66 @@ async def update_prices():
     # DataFrame に戻す
     df = pd.DataFrame(portfolio)
 
-    # 株価更新
     current_prices = []
     values = []
     profits = []
     profit_rates = []
 
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         ticker = str(row["ticker"])
 
+        # --- 株価取得（1日 → 5日 fallback） ---
+        price = None
         try:
-            price = yf.Ticker(ticker).history(period="1d")["Close"].iloc[-1]
+            hist = yf.Ticker(ticker).history(period="1d")
+            if len(hist) > 0:
+                price = hist["Close"].iloc[-1]
         except:
             price = None
 
+        # 1日データが取れない場合は5日データ
+        if price is None:
+            try:
+                hist = yf.Ticker(ticker).history(period="5d")
+                if len(hist) > 0:
+                    price = hist["Close"].iloc[-1]
+            except:
+                price = None
+
+        # --- ★ 前回値を使う（最重要） ---
+        if price is None:
+            price = row.get("current_price", None)
+
         current_prices.append(price)
 
+        # --- 評価額 ---
         if price is not None:
             value = price * row["shares"]
         else:
             value = None
         values.append(value)
 
+        # --- 損益 ---
         if value is not None:
             profit = value - (row["cost"] * row["shares"])
         else:
             profit = None
         profits.append(profit)
 
+        # --- 損益率 ---
         if profit is not None:
             profit_rate = profit / (row["cost"] * row["shares"])
         else:
             profit_rate = None
         profit_rates.append(profit_rate)
 
+    # DataFrame に反映
     df["current_price"] = current_prices
     df["value"] = values
     df["profit"] = profits
     df["profit_rate"] = profit_rates
 
-    # summary 再計算
+    # --- summary 再計算 ---
     invested_amount = int((df["cost"] * df["shares"]).sum())
     portfolio_value = float(df["value"].replace("", 0).sum())
     total_profit = float(portfolio_value - invested_amount)
