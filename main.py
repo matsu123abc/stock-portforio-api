@@ -438,6 +438,7 @@ async def mobile():
                             <div class="title">[${item.ticker}] ${item.name}</div>
                             <div>購入単価: ${item.cost} / 株数: ${item.shares}</div>
                             <div>購入日: ${item.buy_date}</div>
+                            <div>現在値: ${item.current_price}</div>
 
                             <div class="${profitClass}">
                                 損益: ${profitText} 円
