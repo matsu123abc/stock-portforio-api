@@ -628,6 +628,37 @@ async def mobile():
                     <div>目標達成率: ${(s.progress_to_target * 100).toFixed(2)} %</div>
                 `;
 
+                // ---- 保有株式一覧表（Summary の下に追加）----
+                let tableHtml = `
+                    <div class="summary-title">📋 保有株式一覧</div>
+                    <table style="width:100%; border-collapse: collapse; font-size:16px;">
+                        <tr style="background:#e0e0e0;">
+                            <th style="padding:6px; border:1px solid #ccc;">銘柄名</th>
+                            <th style="padding:6px; border:1px solid #ccc;">現在値</th>
+                            <th style="padding:6px; border:1px solid #ccc;">購入単価</th>
+                            <th style="padding:6px; border:1px solid #ccc;">損益</th>
+                        </tr>
+                `;
+
+                data.portfolio.forEach(item => {
+                    const profitClass = item.profit >= 0 ? "color:green;" : "color:red;";
+                    tableHtml += `
+                        <tr>
+                            <td style="padding:6px; border:1px solid #ccc;">${item.name}</td>
+                            <td style="padding:6px; border:1px solid #ccc;">${item.current_price}</td>
+                            <td style="padding:6px; border:1px solid #ccc;">${item.cost}</td>
+                            <td style="padding:6px; border:1px solid #ccc; ${profitClass}">
+                                ${item.profit.toLocaleString()}
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                tableHtml += "</table>";
+
+                // Summary の下に挿入
+                document.getElementById('summary').insertAdjacentHTML("afterend", tableHtml);
+                
                 // ---- 銘柄一覧 ----
                 let html = "";
                 data.portfolio.forEach(item => {
