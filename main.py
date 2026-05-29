@@ -606,6 +606,8 @@ async def mobile():
                 font-weight: bold;
                 margin-bottom: 10px;
             }
+            table { width:100%; border-collapse: collapse; font-size:16px; }
+            th, td { padding:6px; border:1px solid #ccc; text-align:left; }
         </style>
     </head>
     <body>
@@ -632,6 +634,9 @@ async def mobile():
         <div class="summary-box" id="ai_summary">
             AI統括コメントを読み込み中...
         </div>
+
+        <!-- Summary の下に差し込む領域（保有一覧・売却履歴をここに上書き） -->
+        <div id="after_summary"></div>
                 
         <!-- 銘柄一覧 -->
         <div id="list">読み込み中...</div>
@@ -641,153 +646,182 @@ async def mobile():
         </button>
 
         <script>
+            function safeNumber(v) {
+                const n = Number(v);
+                return Number.isFinite(n) ? n : 0;
+            }
+
+            function fmt(n) {
+                return safeNumber(n).toLocaleString();
+            }
+
             async function loadData() {
-                const res = await fetch('/data/get');
-                const data = await res.json();
+                try {
+                    const res = await fetch('/data/get');
+                    const data = await res.json();
 
-                if (data.error) {
-                    document.getElementById('list').innerHTML = data.error;
-                    document.getElementById('summary').innerHTML = "";
-                    return;
-                }
+                    if (data.error) {
+                        document.getElementById('list').innerHTML = data.error;
+                        document.getElementById('summary').innerHTML = "";
+                        document.getElementById('after_summary').innerHTML = "";
+                        document.getElementById('ai_summary').innerHTML = "";
+                        return;
+                    }
 
-                // ---- Summary 表示 ----
-                const s = data.summary;
+                    // ---- Summary 表示 ----
+                    const s = data.summary || {};
 
-                document.getElementById('summary').innerHTML = `
-                    <div class="summary-title">📊 Summary</div>
-                    <div>投資枠: ${s.total_investment_frame.toLocaleString()} 円</div>
-                    <div>投資額: ${s.invested_amount.toLocaleString()} 円</div>
-                    <div>評価額: ${s.portfolio_value.toLocaleString()} 円</div>
+                    // 安全に値を扱う（未定義なら 0 を使う）
+                    const total_investment_frame = safeNumber(s.total_investment_frame);
+                    const invested_amount = safeNumber(s.invested_amount);
+                    const portfolio_value = safeNumber(s.portfolio_value);
+                    const realized_profit = safeNumber(s.realized_profit);
+                    const unrealized_profit = safeNumber(s.unrealized_profit);
+                    const total_profit = safeNumber(s.total_profit);
+                    const total_profit_rate = safeNumber(s.total_profit_rate);
+                    const remaining_cash = safeNumber(s.remaining_cash);
+                    const progress_to_target = safeNumber(s.progress_to_target);
 
-                    <div>実現利益: ${s.realized_profit.toLocaleString()} 円</div>
-                    <div>含み損益: ${s.unrealized_profit.toLocaleString()} 円</div>
-                    <div>総合損益: ${s.total_profit.toLocaleString()} 円</div>
+                    document.getElementById('summary').innerHTML = `
+                        <div class="summary-title">📊 Summary</div>
+                        <div>投資枠: ${total_investment_frame.toLocaleString()} 円</div>
+                        <div>投資額: ${invested_amount.toLocaleString()} 円</div>
+                        <div>評価額: ${portfolio_value.toLocaleString()} 円</div>
 
-                    <div>損益率: ${(s.total_profit_rate * 100).toFixed(2)} %</div>
-                    <div>残りキャッシュ: ${s.remaining_cash.toLocaleString()} 円</div>
-                    <div>目標達成率: ${(s.progress_to_target * 100).toFixed(2)} %</div>
-                `;
+                        <div>実現利益: ${realized_profit.toLocaleString()} 円</div>
+                        <div>含み損益: ${unrealized_profit.toLocaleString()} 円</div>
+                        <div>総合損益: ${total_profit.toLocaleString()} 円</div>
 
-                // ---- 保有株式一覧 ----
-                let tableHtml = `
-                    <div class="summary-title">📋 保有株式一覧</div>
-                    <table style="width:100%; border-collapse: collapse; font-size:16px;">
-                        <tr style="background:#e0e0e0;">
-                            <th style="padding:6px; border:1px solid #ccc;">銘柄名</th>
-                            <th style="padding:6px; border:1px solid #ccc;">現在値</th>
-                            <th style="padding:6px; border:1px solid #ccc;">購入単価</th>
-                            <th style="padding:6px; border:1px solid #ccc;">損益</th>
-                        </tr>
-                `;
-
-                data.portfolio.forEach(item => {
-                    const profitClass = item.profit >= 0 ? "color:green;" : "color:red;";
-                    tableHtml += `
-                        <tr>
-                            <td style="padding:6px; border:1px solid #ccc;">${item.name}</td>
-                            <td style="padding:6px; border:1px solid #ccc;">${item.current_price}</td>
-                            <td style="padding:6px; border:1px solid #ccc;">${item.cost}</td>
-                            <td style="padding:6px; border:1px solid #ccc; ${profitClass}">
-                                ${item.profit.toLocaleString()}
-                            </td>
-                        </tr>
+                        <div>損益率: ${(total_profit_rate * 100).toFixed(2)} %</div>
+                        <div>残りキャッシュ: ${remaining_cash.toLocaleString()} 円</div>
+                        <div>目標達成率: ${(progress_to_target * 100).toFixed(2)} %</div>
                     `;
-                });
 
-                tableHtml += "</table>";
-
-                // Summary の下に挿入
-                document.getElementById('summary').insertAdjacentHTML("afterend", tableHtml);
-
-
-                // ============================================================
-                // 📘 売却履歴（realized_trades） ← ★ここを追加
-                // ============================================================
-                if (data.realized_trades && data.realized_trades.length > 0) {
-
-                    let tradesHtml = `
-                        <div class="summary-title">📘 売却履歴</div>
-                        <table style="width:100%; border-collapse: collapse; font-size:16px;">
+                    // ---- 保有株式一覧 ----
+                    let tableHtml = `
+                        <div class="summary-title">📋 保有株式一覧</div>
+                        <table>
                             <tr style="background:#e0e0e0;">
-                                <th style="padding:6px; border:1px solid #ccc;">銘柄名</th>
-                                <th style="padding:6px; border:1px solid #ccc;">売却日</th>
-                                <th style="padding:6px; border:1px solid #ccc;">株数</th>
-                                <th style="padding:6px; border:1px solid #ccc;">売却価格</th>
-                                <th style="padding:6px; border:1px solid #ccc;">取得単価</th>
-                                <th style="padding:6px; border:1px solid #ccc;">実現利益</th>
+                                <th>銘柄名</th>
+                                <th>現在値</th>
+                                <th>購入単価</th>
+                                <th>損益</th>
                             </tr>
                     `;
 
-                    data.realized_trades.forEach(t => {
-                        const realizedProfit = (t.sell_price - t.cost) * t.shares;
-                        const profitColor = realizedProfit >= 0 ? "color:green;" : "color:red;";
-
-                        tradesHtml += `
+                    (data.portfolio || []).forEach(item => {
+                        const profit = safeNumber(item.profit);
+                        const profitStyle = profit >= 0 ? "color:green;" : "color:red;";
+                        const currentPrice = item.current_price === null || item.current_price === "" ? "-" : item.current_price;
+                        tableHtml += `
                             <tr>
-                                <td style="padding:6px; border:1px solid #ccc;">${t.name}</td>
-                                <td style="padding:6px; border:1px solid #ccc;">${t.sell_date}</td>
-                                <td style="padding:6px; border:1px solid #ccc;">${t.shares}</td>
-                                <td style="padding:6px; border:1px solid #ccc;">${t.sell_price}</td>
-                                <td style="padding:6px; border:1px solid #ccc;">${t.cost}</td>
-                                <td style="padding:6px; border:1px solid #ccc; ${profitColor}">
-                                    ${realizedProfit.toLocaleString()}
-                                </td>
+                                <td>${item.name || ""}</td>
+                                <td>${currentPrice}</td>
+                                <td>${fmt(item.cost)}</td>
+                                <td style="${profitStyle}">${fmt(profit)}</td>
                             </tr>
                         `;
                     });
 
-                    tradesHtml += "</table>";
+                    tableHtml += "</table>";
 
-                    // 保有株式一覧の下に売却履歴を追加
-                    document.getElementById('summary').insertAdjacentHTML("afterend", tradesHtml);
-                }
+                    // ============================================================
+                    // 📘 売却履歴（realized_trades）
+                    // ============================================================
+                    let tradesHtml = "";
+                    if (data.realized_trades && data.realized_trades.length > 0) {
+                        tradesHtml = `
+                            <div class="summary-title">📘 売却履歴</div>
+                            <table>
+                                <tr style="background:#e0e0e0;">
+                                    <th>銘柄名</th>
+                                    <th>売却日</th>
+                                    <th>株数</th>
+                                    <th>売却価格</th>
+                                    <th>取得単価</th>
+                                    <th>実現利益</th>
+                                </tr>
+                        `;
 
+                        data.realized_trades.forEach(t => {
+                            const sellPrice = safeNumber(t.sell_price);
+                            const cost = safeNumber(t.cost);
+                            const shares = safeNumber(t.shares);
+                            const realizedProfit = (sellPrice - cost) * shares;
+                            const profitStyle = realizedProfit >= 0 ? "color:green;" : "color:red;";
 
-                // ---- 銘柄カード一覧 ----
-                let html = "";
-                data.portfolio.forEach(item => {
-                    const profitClass = item.profit >= 0 ? "profit-positive" : "profit-negative";
-                    const profitText = item.profit.toLocaleString();
+                            tradesHtml += `
+                                <tr>
+                                    <td>${t.name || ""}</td>
+                                    <td>${t.sell_date || ""}</td>
+                                    <td>${shares.toLocaleString()}</td>
+                                    <td>${sellPrice.toLocaleString()}</td>
+                                    <td>${cost.toLocaleString()}</td>
+                                    <td style="${profitStyle}">${realizedProfit.toLocaleString()}</td>
+                                </tr>
+                            `;
+                        });
 
-                    html += `
-                        <div class="card">
-                            <div class="title">[${item.ticker}] ${item.name}</div>
-                            <div>購入単価: ${item.cost} / 株数: ${item.shares}</div>
-                            <div>購入日: ${item.buy_date}</div>
-                            <div>現在値: ${item.current_price}</div>
+                        tradesHtml += "</table>";
+                    }
 
-                            <div class="${profitClass}">
-                                損益: ${profitText} 円
-                            </div>
+                    // ---- after_summary に一度だけ上書き（重複挿入を防ぐ）----
+                    document.getElementById('after_summary').innerHTML = tableHtml + tradesHtml;
 
-                            <div style="
-                                margin-top:10px;
-                                padding:10px;
-                                background:#eef;
-                                border-radius:6px;
-                                white-space:pre-wrap;
-                            ">
-                                <b>AI コメント</b><br>
-                                <div style="font-size:14px; line-height:1.5;">
-                                    ${item.ai_comment || "（コメントなし）"}
+                    // ---- 銘柄カード一覧 ----
+                    let html = "";
+                    (data.portfolio || []).forEach(item => {
+                        const profit = safeNumber(item.profit);
+                        const profitClass = profit >= 0 ? "profit-positive" : "profit-negative";
+                        const profitText = fmt(profit);
+                        const currentPrice = item.current_price === null || item.current_price === "" ? "-" : item.current_price;
+
+                        html += `
+                            <div class="card">
+                                <div class="title">[${item.ticker || ""}] ${item.name || ""}</div>
+                                <div>購入単価: ${fmt(item.cost)} / 株数: ${safeNumber(item.shares).toLocaleString()}</div>
+                                <div>購入日: ${item.buy_date || ""}</div>
+                                <div>現在値: ${currentPrice}</div>
+
+                                <div class="${profitClass}">
+                                    損益: ${profitText} 円
                                 </div>
-                            </div>
 
-                            <button onclick="alert('編集は Step9 で実装します')">編集</button>
-                            <button onclick="alert('削除は Step9 で実装します')">削除</button>
+                                <div style="
+                                    margin-top:10px;
+                                    padding:10px;
+                                    background:#eef;
+                                    border-radius:6px;
+                                    white-space:pre-wrap;
+                                ">
+                                    <b>AI コメント</b><br>
+                                    <div style="font-size:14px; line-height:1.5;">
+                                        ${item.ai_comment || "（コメントなし）"}
+                                    </div>
+                                </div>
+
+                                <button onclick="alert('編集は Step9 で実装します')">編集</button>
+                                <button onclick="alert('削除は Step9 で実装します')">削除</button>
+                            </div>
+                        `;
+                    });
+
+                    document.getElementById('ai_summary').innerHTML = `
+                        <div class="summary-title">🤖 AI 統括コメント</div>
+                        <div style="white-space:pre-wrap; line-height:1.5;">
+                            ${ (s.ai_summary_comment) ? s.ai_summary_comment : "（まだ生成されていません）" }
                         </div>
                     `;
-                });
 
-                document.getElementById('ai_summary').innerHTML = `
-                    <div class="summary-title">🤖 AI 統括コメント</div>
-                    <div style="white-space:pre-wrap; line-height:1.5;">
-                        ${data.summary.ai_summary_comment || "（まだ生成されていません）"}
-                    </div>
-                `;
+                    document.getElementById('list').innerHTML = html;
 
-                document.getElementById('list').innerHTML = html;
+                } catch (err) {
+                    console.error(err);
+                    document.getElementById('list').innerHTML = "データ読み込み中にエラーが発生しました。";
+                    document.getElementById('after_summary').innerHTML = "";
+                    document.getElementById('summary').innerHTML = "";
+                    document.getElementById('ai_summary').innerHTML = "";
+                }
             }
 
             loadData();
@@ -821,4 +855,3 @@ async def mobile():
     </body>
     </html>
     """
-
