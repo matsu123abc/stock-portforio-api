@@ -74,17 +74,21 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 PORTFOLIO_JSON = os.path.join(DATA_DIR, "portfolio.json")
 SUMMARY_JSON = os.path.join(DATA_DIR, "summary.json")
+REALIZED_JSON = os.path.join(DATA_DIR, "realized_trades.json")
 
 
 # -----------------------------
 # JSON 保存
 # -----------------------------
-def save_json(portfolio, summary):
+def save_json(portfolio, summary, realized_trades):
     with open(PORTFOLIO_JSON, "w", encoding="utf-8") as f:
         json.dump(portfolio, f, ensure_ascii=False, indent=2)
 
     with open(SUMMARY_JSON, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
+
+    with open(REALIZED_JSON, "w", encoding="utf-8") as f:
+        json.dump(realized_trades, f, ensure_ascii=False, indent=2)
 
 
 # -----------------------------
@@ -92,7 +96,7 @@ def save_json(portfolio, summary):
 # -----------------------------
 def load_json():
     if not os.path.exists(PORTFOLIO_JSON) or not os.path.exists(SUMMARY_JSON):
-        return None, None
+        return None, None, None
 
     with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
         portfolio = json.load(f)
@@ -100,10 +104,16 @@ def load_json():
     with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
         summary = json.load(f)
 
+    if os.path.exists(REALIZED_JSON):
+        with open(REALIZED_JSON, "r", encoding="utf-8") as f:
+            realized_trades = json.load(f)
+    else:
+        realized_trades = []
+
     if "ai_summary_comment" not in summary:
         summary["ai_summary_comment"] = ""
 
-    return portfolio, summary
+    return portfolio, summary, realized_trades
 
 
 # -----------------------------
@@ -178,6 +188,7 @@ EPS: {eps}
     )
 
     return res.choices[0].message.content.strip()
+
 
 # -----------------------------
 # Excel アップロード → 計算 → JSON 保存
@@ -274,6 +285,16 @@ async def upload(file: UploadFile = File(...)):
             "progress_to_target": progress_to_target
         }
 
+        # ---- realized_trades 読み込み ----
+        if "realized_trades" in xls.sheet_names:
+            df_trades = pd.read_excel(xls, sheet_name="realized_trades")
+            df_trades = df_trades.fillna("")
+            if "sell_date" in df_trades.columns:
+                df_trades["sell_date"] = df_trades["sell_date"].astype(str)
+            realized_trades_json = df_trades.to_dict(orient="records")
+        else:
+            realized_trades_json = []
+
         # ---- NaN を空文字に変換 ----
         df = df.fillna("")
 
@@ -285,7 +306,7 @@ async def upload(file: UploadFile = File(...)):
         portfolio_json = df.to_dict(orient="records")
 
         # ---- JSON 保存 ----
-        save_json(portfolio_json, summary_json)
+        save_json(portfolio_json, summary_json, realized_trades_json)
 
         # ---- 最終レスポンス ----
         return {
@@ -293,7 +314,8 @@ async def upload(file: UploadFile = File(...)):
             "portfolio_rows": len(portfolio_json),
             "portfolio": portfolio_json,
             "summary": summary_json,
-            "message": "portfolio + summary calculated & saved"
+            "realized_trades": realized_trades_json,
+            "message": "portfolio + summary + realized_trades calculated & saved"
         }
 
     except Exception as e:
@@ -302,12 +324,13 @@ async def upload(file: UploadFile = File(...)):
             content={"error": f"Excel 読み込みエラー: {str(e)}"}
         )
 
+
 # -----------------------------
-# update_prices（省略：元のまま）
+# update_prices
 # -----------------------------
 @app.post("/update_prices")
 async def update_prices():
-    portfolio, summary = load_json()
+    portfolio, summary, realized_trades = load_json()
 
     if portfolio is None:
         return {"error": "まだデータが保存されていません"}
@@ -403,8 +426,8 @@ async def update_prices():
 
     portfolio_new = df.fillna("").to_dict(orient="records")
 
-    # JSON 保存
-    save_json(portfolio_new, summary_new)
+    # JSON 保存（realized_trades はそのまま維持）
+    save_json(portfolio_new, summary_new, realized_trades)
 
     return {
         "message": "株価を更新しました",
@@ -412,12 +435,13 @@ async def update_prices():
         "summary": summary_new
     }
 
+
 # -----------------------------
 # AI コメント更新（generate_ai_comment を使用）
 # -----------------------------
 @app.post("/update_ai_comment")
 async def update_ai_comment():
-    portfolio, summary = load_json()
+    portfolio, summary, realized_trades = load_json()
 
     if portfolio is None:
         return {"error": "まだデータが保存されていません"}
@@ -432,7 +456,7 @@ async def update_ai_comment():
 
         updated_portfolio.append(item)
 
-    save_json(updated_portfolio, summary)
+    save_json(updated_portfolio, summary, realized_trades)
 
     return {
         "message": "AI コメントを更新しました",
@@ -441,16 +465,15 @@ async def update_ai_comment():
 
 
 # -----------------------------
-# update_ai_summary（元のまま）
+# update_ai_summary
 # -----------------------------
 @app.post("/update_ai_summary")
 async def update_ai_summary():
-    portfolio, summary = load_json()
+    portfolio, summary, realized_trades = load_json()
 
     if portfolio is None:
         return {"error": "まだデータが保存されていません"}
 
-    # ポートフォリオ全体を AI に渡す
     prompt = f"""
 あなたはプロの投資アナリストです。
 以下のポートフォリオ全体を分析し、総合的な戦略コメントを作成してください。
@@ -489,31 +512,32 @@ async def update_ai_summary():
     except Exception as e:
         ai_summary = f"AI 統括コメント生成エラー: {str(e)}"
 
-    # summary に追加
     summary["ai_summary_comment"] = ai_summary
 
-    # 保存
-    save_json(portfolio, summary)
+    save_json(portfolio, summary, realized_trades)
 
     return {
         "message": "AI 統括コメントを更新しました",
         "summary": summary
     }
 
+
 # -----------------------------
 # スマホ UI 用：保存された JSON を返す
 # -----------------------------
 @app.get("/data/get")
 async def get_data():
-    portfolio, summary = load_json()
+    portfolio, summary, realized_trades = load_json()
 
     if portfolio is None:
         return {"error": "まだデータが保存されていません"}
 
     return {
         "portfolio": portfolio,
-        "summary": summary
+        "summary": summary,
+        "realized_trades": realized_trades
     }
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -528,6 +552,7 @@ async def index():
         </body>
     </html>
     """
+
 
 @app.get("/mobile", response_class=HTMLResponse)
 async def mobile():
