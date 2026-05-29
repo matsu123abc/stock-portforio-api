@@ -1036,13 +1036,6 @@ async def mobile():
                         `;
                     });
 
-                    document.getElementById('ai_summary').innerHTML = `
-                        <div class="summary-title">🤖 AI 統括コメント</div>
-                        <div style="white-space:pre-wrap; line-height:1.5;">
-                            ${ (s.ai_summary_comment) ? s.ai_summary_comment : "（まだ生成されていません）" }
-                        </div>
-                    `;
-
                     document.getElementById('list').innerHTML = html;
 
                 } catch (err) {
@@ -1069,14 +1062,6 @@ async def mobile():
                 const data = await res.json();
                 if (data.error) { alert(data.error); return; }
                 alert("AI コメントを更新しました！");
-                loadData();
-            }
-
-            async function updateAISummary() {
-                const res = await fetch('/update_ai_summary', { method: 'POST' });
-                const data = await res.json();
-                if (data.error) { alert(data.error); return; }
-                alert("AI 統括コメントを更新しました！");
                 loadData();
             }
 
