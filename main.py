@@ -196,11 +196,6 @@ EPS: {eps}
 ### 現状の評価
 （業績・ニュースを踏まえた評価）
 
-### 今後の戦略
-（買い増し / ホールド / 利益確定）
-
-### 注意点
-（業績リスク・競合リスク・市場リスク）
 """
 
     res = client.chat.completions.create(
@@ -629,116 +624,20 @@ async def update_ai_comment():
 # -----------------------------
 @app.post("/update_ai_summary")
 async def update_ai_summary():
-    """
-    AI 統括コメントを生成して summary.ai_summary_comment に保存します。
-    - 実現利益を含めた総合評価を作成します。
-    - 一般的な注意点セクションは含めません（ユーザーの要望）。
-    - portfolio, summary, realized_trades は load_json() から取得します。
-    """
     portfolio, summary, realized_trades = load_json()
 
-    if portfolio is None:
+    if summary is None:
         return {"error": "まだデータが保存されていません"}
 
-    # 安全に値を取得
-    def safe(v, default=0):
-        try:
-            return float(v)
-        except:
-            return default
+    # AI統括コメントは不要 → 空にする
+    summary["ai_summary_comment"] = ""
 
-    invested_amount = int(summary.get("invested_amount", 0))
-    portfolio_value = float(summary.get("portfolio_value", 0))
-    realized_profit = int(summary.get("realized_profit", 0))
-    unrealized_profit = int(summary.get("unrealized_profit", 0))
-    total_profit = int(summary.get("total_profit", realized_profit + unrealized_profit))
-    total_profit_rate = float(summary.get("total_profit_rate", 0.0))
-    remaining_cash = int(summary.get("remaining_cash", 0))
-    progress_to_target = float(summary.get("progress_to_target", 0.0))
-
-    # --- 総合評価（実現利益を含める） ---
-    summary_lines = []
-    summary_lines.append("### 総合評価")
-    summary_lines.append(
-        f"投資額: {invested_amount:,} 円、評価額: {int(portfolio_value):,} 円、"
-        f"実現利益: {realized_profit:,} 円、含み損益: {unrealized_profit:,} 円、"
-        f"総合損益: {total_profit:,} 円（損益率: {total_profit_rate * 100:.2f}%）。"
-    )
-    summary_lines.append(
-        f"残りキャッシュ: {remaining_cash:,} 円、目標達成率: {progress_to_target * 100:.2f}%。"
-    )
-
-    # --- 銘柄別要点（保有分のみ。売却済みは realized_trades で別表示） ---
-    summary_lines.append("\n### 銘柄別の要点")
-    if portfolio:
-        for p in portfolio:
-            name = p.get("name") or p.get("ticker") or "不明銘柄"
-            try:
-                shares = float(p.get("shares") or 0)
-            except:
-                shares = 0
-            try:
-                cost = float(p.get("cost") or 0)
-            except:
-                cost = 0
-            try:
-                current = float(p.get("current_price") or 0)
-            except:
-                current = 0
-            profit = int((current - cost) * shares)
-            # 簡潔な推奨（表現は助言ではなく観察ベース）
-            if profit > 0:
-                action = "現状は含み益。ホールドを基本に利確検討可。"
-            elif profit < 0:
-                action = "含み損。業績や材料を確認しつつ様子見推奨。"
-            else:
-                action = "現状横ばい。材料待ち。"
-            summary_lines.append(f"- {name}: 現在損益 {profit:,} 円。{action}")
-    else:
-        summary_lines.append("保有銘柄はありません。")
-
-    # --- 売却履歴の要約（主要な実現益を強調） ---
-    summary_lines.append("\n### 売却履歴（要約）")
-    if realized_trades:
-        # 代表的な売却トップ1件をピックアップして強調（必要なら複数に拡張可）
-        # 合計実現利益は既に summary に入っているため、ここでは主要銘柄を列挙
-        # 上位3件を表示
-        try:
-            # realized_trades は dict のリスト。実現利益を計算してソート
-            trades_with_profit = []
-            for t in realized_trades:
-                try:
-                    sp = float(t.get("sell_price") or 0)
-                    c = float(t.get("cost") or 0)
-                    sh = float(t.get("shares") or 0)
-                    rp = int((sp - c) * sh)
-                except:
-                    rp = 0
-                trades_with_profit.append((t.get("name") or t.get("ticker") or "不明", rp))
-            trades_with_profit.sort(key=lambda x: x[1], reverse=True)
-            top = trades_with_profit[:3]
-            for name, rp in top:
-                summary_lines.append(f"- {name}: 実現利益 {rp:,} 円")
-            summary_lines.append(f"合計実現利益: {realized_profit:,} 円")
-        except Exception:
-            summary_lines.append("売却履歴の要約を作成できませんでした。")
-    else:
-        summary_lines.append("売却履歴はありません。")
-
-    # --- 実行プラン（簡潔） ---
-    summary_lines.append("\n### 実行プラン（簡潔）")
-    summary_lines.append("- 実現利益を踏まえ、再投資先と税負担を検討してください。")
-    summary_lines.append("- 特定銘柄依存が高い場合は段階的なリバランスを検討してください。")
-    summary_lines.append("- 主要銘柄の業績・材料を定期的に確認してください。")
-
-    # 結合して保存
-    ai_comment = "\n\n".join(summary_lines)
-
-    # summary に保存して JSON を更新
-    summary["ai_summary_comment"] = ai_comment
     save_json(portfolio, summary, realized_trades)
 
-    return {"message": "AI 統括コメントを更新しました", "ai_summary_comment": ai_comment}
+    return {
+        "message": "AI 統括コメントをクリアしました",
+        "ai_summary_comment": ""
+    }
 
 # -----------------------------
 # スマホ UI 用：保存された JSON を返す
@@ -961,17 +860,9 @@ async def mobile():
             🤖 AI コメントを更新する
         </button>
 
-        <button onclick="updateAISummary()" style="background:#3f51b5; width:100%; margin-bottom:20px;">
-            📘 AI 統括コメントを更新する
-        </button>
-
         <!-- Summary 表示エリア -->
         <div class="summary-box" id="summary">
             Summary を読み込み中...
-        </div>
-
-        <div class="summary-box" id="ai_summary">
-            AI統括コメントを読み込み中...
         </div>
 
         <!-- Summary の下に差し込む領域（保有一覧・売却履歴をここに上書き） -->
