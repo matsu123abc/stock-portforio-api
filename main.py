@@ -96,7 +96,7 @@ def save_json(portfolio, summary, realized_trades):
 # -----------------------------
 def load_json():
     if not os.path.exists(PORTFOLIO_JSON) or not os.path.exists(SUMMARY_JSON):
-        return None, None, None
+        return None, None, []
 
     with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
         portfolio = json.load(f)
@@ -110,11 +110,15 @@ def load_json():
     else:
         realized_trades = []
 
-    if "ai_summary_comment" not in summary:
-        summary["ai_summary_comment"] = ""
+    # summary にキーが無ければ初期値を入れておく（UI 停止を防ぐ）
+    summary.setdefault("ai_summary_comment", "")
+    summary.setdefault("realized_profit", 0)
+    summary.setdefault("unrealized_profit", 0)
+    summary.setdefault("total_profit", summary.get("total_profit", 0))
+    summary.setdefault("total_profit_rate", summary.get("total_profit_rate", 0.0))
+    summary.setdefault("progress_to_target", summary.get("progress_to_target", 0.0))
 
     return portfolio, summary, realized_trades
-
 
 # -----------------------------
 # AI コメント生成（SerpAPI ニュース版）
@@ -212,6 +216,23 @@ async def upload(file: UploadFile = File(...)):
         # ---- portfolio 読み込み ----
         df = pd.read_excel(xls, sheet_name="portfolio")
 
+        # ---- realized_trades 読み込み（先に読み込んでおく） ----
+        if "realized_trades" in xls.sheet_names:
+            df_trades = pd.read_excel(xls, sheet_name="realized_trades")
+            df_trades = df_trades.fillna("")
+            if "sell_date" in df_trades.columns:
+                df_trades["sell_date"] = df_trades["sell_date"].astype(str)
+            realized_trades_json = df_trades.to_dict(orient="records")
+        else:
+            realized_trades_json = []
+
+        # NaN を空文字に変換（計算前に数値列はそのままにしておく）
+        df = df.fillna("")
+
+        # ---- buy_date を文字列に変換（重要）----
+        if "buy_date" in df.columns:
+            df["buy_date"] = df["buy_date"].astype(str)
+
         # 株価取得と計算
         current_prices = []
         values = []
@@ -230,22 +251,32 @@ async def upload(file: UploadFile = File(...)):
             current_prices.append(price)
 
             # 評価額
+            try:
+                shares = float(row["shares"])
+            except:
+                shares = 0.0
+
             if price is not None:
-                value = price * row["shares"]
+                value = price * shares
             else:
                 value = None
             values.append(value)
 
             # 損益
+            try:
+                cost = float(row["cost"])
+            except:
+                cost = 0.0
+
             if value is not None:
-                profit = value - (row["cost"] * row["shares"])
+                profit = value - (cost * shares)
             else:
                 profit = None
             profits.append(profit)
 
             # 損益率
-            if profit is not None:
-                profit_rate = profit / (row["cost"] * row["shares"])
+            if profit is not None and (cost * shares) != 0:
+                profit_rate = profit / (cost * shares)
             else:
                 profit_rate = None
             profit_rates.append(profit_rate)
@@ -267,8 +298,15 @@ async def upload(file: UploadFile = File(...)):
             annual_target_profit = 3000000
 
         # portfolio の集計（numpy → Python 型へ変換）
-        invested_amount = int((df["cost"] * df["shares"]).sum())
-        portfolio_value = float(df["value"].replace("", 0).sum())
+        # df["cost"] と df["shares"] が文字列になっている可能性があるため安全に変換
+        try:
+            invested_amount = int((df["cost"].astype(float) * df["shares"].astype(float)).sum())
+        except:
+            # フォールバック：ゼロや欠損を無視して計算
+            invested_amount = int(sum([ (float(r.get("cost") or 0) * float(r.get("shares") or 0)) for r in df.to_dict(orient="records") ]))
+
+        # portfolio_value は value 列の合計（None を 0 として扱う）
+        portfolio_value = float(sum([ (v if (v is not None and v != "") else 0) for v in df["value"].tolist() ]))
         total_profit = float(portfolio_value - invested_amount)
         total_profit_rate = float(total_profit / invested_amount) if invested_amount > 0 else 0.0
         remaining_cash = int(total_investment_frame - invested_amount)
@@ -278,43 +316,38 @@ async def upload(file: UploadFile = File(...)):
             "total_investment_frame": int(total_investment_frame),
             "invested_amount": invested_amount,
             "portfolio_value": portfolio_value,
-            "total_profit": total_profit,
+            "total_profit": total_profit,               # ここは「含み損益（保有分）」として扱う
             "total_profit_rate": total_profit_rate,
             "remaining_cash": remaining_cash,
             "annual_target_profit": int(annual_target_profit),
             "progress_to_target": progress_to_target
         }
 
-        # ---- 実現利益（realized_trades） ----
+        # ---- 実現利益（realized_trades_json が既に作られている前提） ----
         realized_profit_total = 0
         for t in realized_trades_json:
-            realized_profit_total += (t["sell_price"] - t["cost"]) * t["shares"]
+            try:
+                sell_price = float(t.get("sell_price") or 0)
+            except:
+                sell_price = 0.0
+            try:
+                cost = float(t.get("cost") or 0)
+            except:
+                cost = 0.0
+            try:
+                shares = float(t.get("shares") or 0)
+            except:
+                shares = 0.0
+            realized_profit_total += (sell_price - cost) * shares
 
         # ---- Summary を売却履歴込みに修正 ----
-        summary_json["realized_profit"] = realized_profit_total
-        summary_json["unrealized_profit"] = total_profit
-        summary_json["total_profit"] = total_profit + realized_profit_total
-        summary_json["total_profit_rate"] = summary_json["total_profit"] / invested_amount
-        summary_json["progress_to_target"] = summary_json["total_profit"] / annual_target_profit
+        summary_json["realized_profit"] = int(realized_profit_total)
+        summary_json["unrealized_profit"] = int(total_profit)
+        summary_json["total_profit"] = int(total_profit + realized_profit_total)
+        summary_json["total_profit_rate"] = (summary_json["total_profit"] / invested_amount) if invested_amount > 0 else 0.0
+        summary_json["progress_to_target"] = (summary_json["total_profit"] / annual_target_profit) if annual_target_profit > 0 else 0.0
 
-        # ---- realized_trades 読み込み ----
-        if "realized_trades" in xls.sheet_names:
-            df_trades = pd.read_excel(xls, sheet_name="realized_trades")
-            df_trades = df_trades.fillna("")
-            if "sell_date" in df_trades.columns:
-                df_trades["sell_date"] = df_trades["sell_date"].astype(str)
-            realized_trades_json = df_trades.to_dict(orient="records")
-        else:
-            realized_trades_json = []
-
-        # ---- NaN を空文字に変換 ----
-        df = df.fillna("")
-
-        # ---- buy_date を文字列に変換（重要）----
-        if "buy_date" in df.columns:
-            df["buy_date"] = df["buy_date"].astype(str)
-
-        # JSON に変換
+        # JSON に変換（portfolio は既に NaN を "" に変換済み）
         portfolio_json = df.to_dict(orient="records")
 
         # ---- JSON 保存 ----
@@ -356,7 +389,7 @@ async def update_prices():
     profit_rates = []
 
     for idx, row in df.iterrows():
-        ticker = str(row["ticker"])
+        ticker = str(row.get("ticker", ""))
 
         # --- 株価取得（1日 → 5日 fallback） ---
         price = None
@@ -383,22 +416,32 @@ async def update_prices():
         current_prices.append(price)
 
         # --- 評価額 ---
+        try:
+            shares = float(row.get("shares") or 0)
+        except:
+            shares = 0.0
+
         if price is not None:
-            value = price * row["shares"]
+            value = price * shares
         else:
             value = None
         values.append(value)
 
         # --- 損益 ---
+        try:
+            cost = float(row.get("cost") or 0)
+        except:
+            cost = 0.0
+
         if value is not None:
-            profit = value - (row["cost"] * row["shares"])
+            profit = value - (cost * shares)
         else:
             profit = None
         profits.append(profit)
 
         # --- 損益率 ---
-        if profit is not None:
-            profit_rate = profit / (row["cost"] * row["shares"])
+        if profit is not None and (cost * shares) != 0:
+            profit_rate = profit / (cost * shares)
         else:
             profit_rate = None
         profit_rates.append(profit_rate)
@@ -410,23 +453,55 @@ async def update_prices():
     df["profit_rate"] = profit_rates
 
     # --- summary 再計算 ---
-    invested_amount = int((df["cost"] * df["shares"]).sum())
-    portfolio_value = float(df["value"].replace("", 0).sum())
-    total_profit = float(portfolio_value - invested_amount)
-    total_profit_rate = float(total_profit / invested_amount) if invested_amount > 0 else 0.0
+    # invested_amount は cost * shares の合計（安全に数値変換）
+    try:
+        invested_amount = int((df["cost"].astype(float) * df["shares"].astype(float)).sum())
+    except:
+        invested_amount = int(sum([ (float(r.get("cost") or 0) * float(r.get("shares") or 0)) for r in df.to_dict(orient="records") ]))
 
-    total_investment_frame = summary["total_investment_frame"]
-    annual_target_profit = summary["annual_target_profit"]
+    # portfolio_value は value 列の合計（None を 0 として扱う）
+    portfolio_value = float(sum([ (v if (v is not None and v != "") else 0) for v in df["value"].tolist() ]))
+    unrealized_profit = float(portfolio_value - invested_amount)
+    unrealized_profit_rate = float(unrealized_profit / invested_amount) if invested_amount > 0 else 0.0
 
-    remaining_cash = int(total_investment_frame - invested_amount)
-    progress_to_target = float(total_profit / annual_target_profit)
+    total_investment_frame = summary.get("total_investment_frame", 0)
+    annual_target_profit = summary.get("annual_target_profit", 0)
+
+    remaining_cash = int(total_investment_frame - invested_amount) if total_investment_frame is not None else 0
+
+    # ---- 実現利益（realized_trades を使って計算） ----
+    realized_profit_total = 0
+    for t in (realized_trades or []):
+        try:
+            sell_price = float(t.get("sell_price") or 0)
+        except:
+            sell_price = 0.0
+        try:
+            cost_r = float(t.get("cost") or 0)
+        except:
+            cost_r = 0.0
+        try:
+            shares_r = float(t.get("shares") or 0)
+        except:
+            shares_r = 0.0
+        realized_profit_total += (sell_price - cost_r) * shares_r
+
+    # 総合損益（実現 + 含み）
+    total_profit_combined = unrealized_profit + realized_profit_total
+    total_profit_rate_combined = (total_profit_combined / invested_amount) if invested_amount > 0 else 0.0
+    progress_to_target = (total_profit_combined / annual_target_profit) if annual_target_profit and annual_target_profit > 0 else 0.0
 
     summary_new = {
         "total_investment_frame": total_investment_frame,
         "invested_amount": invested_amount,
         "portfolio_value": portfolio_value,
-        "total_profit": total_profit,
-        "total_profit_rate": total_profit_rate,
+        # 含み損益（保有分）
+        "unrealized_profit": unrealized_profit,
+        # 実現損益（売却済み）
+        "realized_profit": realized_profit_total,
+        # 総合損益（実現 + 含み）
+        "total_profit": total_profit_combined,
+        "total_profit_rate": total_profit_rate_combined,
         "remaining_cash": remaining_cash,
         "annual_target_profit": annual_target_profit,
         "progress_to_target": progress_to_target
@@ -543,6 +618,82 @@ async def get_data():
 
     if portfolio is None:
         return {"error": "まだデータが保存されていません"}
+
+    # summary が None の場合は空 dict に
+    if summary is None:
+        summary = {}
+
+    # realized_trades が None の場合は空リストに
+    if realized_trades is None:
+        realized_trades = []
+
+    # --- 実現利益が無ければ realized_trades から計算 ---
+    if "realized_profit" not in summary:
+        realized_profit_total = 0
+        try:
+            for t in realized_trades:
+                sell_price = float(t.get("sell_price") or 0)
+                cost = float(t.get("cost") or 0)
+                shares = float(t.get("shares") or 0)
+                realized_profit_total += (sell_price - cost) * shares
+        except Exception:
+            realized_profit_total = 0
+        summary["realized_profit"] = int(realized_profit_total)
+
+    # --- 含み損益（unrealized_profit）が無ければ portfolio から計算 ---
+    if "unrealized_profit" not in summary:
+        try:
+            # portfolio は list of dict
+            invested_amount = 0
+            portfolio_value = 0
+            for p in portfolio:
+                cost = float(p.get("cost") or 0)
+                shares = float(p.get("shares") or 0)
+                invested_amount += cost * shares
+
+                # value 列があるなら使う。なければ current_price * shares を試す
+                v = p.get("value", None)
+                if v is None or v == "":
+                    try:
+                        cp = float(p.get("current_price") or 0)
+                        portfolio_value += cp * shares
+                    except:
+                        portfolio_value += 0
+                else:
+                    try:
+                        portfolio_value += float(v)
+                    except:
+                        portfolio_value += 0
+
+            unrealized = portfolio_value - invested_amount
+        except Exception:
+            unrealized = 0
+        summary["unrealized_profit"] = int(unrealized)
+
+    # --- 総合損益（total_profit）が無ければ実現 + 含みで計算 ---
+    if "total_profit" not in summary:
+        try:
+            summary["total_profit"] = int(summary.get("realized_profit", 0) + summary.get("unrealized_profit", 0))
+        except Exception:
+            summary["total_profit"] = 0
+
+    # --- total_profit_rate / progress_to_target の補完（安全に） ---
+    if "total_profit_rate" not in summary:
+        try:
+            invested_amount = float(summary.get("invested_amount") or 0)
+            summary["total_profit_rate"] = (summary.get("total_profit", 0) / invested_amount) if invested_amount > 0 else 0.0
+        except Exception:
+            summary["total_profit_rate"] = 0.0
+
+    if "progress_to_target" not in summary:
+        try:
+            annual_target = float(summary.get("annual_target_profit") or 0)
+            summary["progress_to_target"] = (summary.get("total_profit", 0) / annual_target) if annual_target > 0 else 0.0
+        except Exception:
+            summary["progress_to_target"] = 0.0
+
+    # ai_summary_comment が無ければ空文字を入れておく（UI 安定化）
+    summary.setdefault("ai_summary_comment", "")
 
     return {
         "portfolio": portfolio,
