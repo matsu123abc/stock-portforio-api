@@ -553,7 +553,6 @@ async def index():
     </html>
     """
 
-
 @app.get("/mobile", response_class=HTMLResponse)
 async def mobile():
     return """
@@ -653,7 +652,7 @@ async def mobile():
                     <div>目標達成率: ${(s.progress_to_target * 100).toFixed(2)} %</div>
                 `;
 
-                // ---- 保有株式一覧表（Summary の下に追加）----
+                // ---- 保有株式一覧 ----
                 let tableHtml = `
                     <div class="summary-title">📋 保有株式一覧</div>
                     <table style="width:100%; border-collapse: collapse; font-size:16px;">
@@ -683,15 +682,58 @@ async def mobile():
 
                 // Summary の下に挿入
                 document.getElementById('summary').insertAdjacentHTML("afterend", tableHtml);
-                
-                // ---- 銘柄一覧 ----
+
+
+                // ============================================================
+                // 📘 売却履歴（realized_trades） ← ★ここを追加
+                // ============================================================
+                if (data.realized_trades && data.realized_trades.length > 0) {
+
+                    let tradesHtml = `
+                        <div class="summary-title">📘 売却履歴</div>
+                        <table style="width:100%; border-collapse: collapse; font-size:16px;">
+                            <tr style="background:#e0e0e0;">
+                                <th style="padding:6px; border:1px solid #ccc;">銘柄名</th>
+                                <th style="padding:6px; border:1px solid #ccc;">売却日</th>
+                                <th style="padding:6px; border:1px solid #ccc;">株数</th>
+                                <th style="padding:6px; border:1px solid #ccc;">売却価格</th>
+                                <th style="padding:6px; border:1px solid #ccc;">取得単価</th>
+                                <th style="padding:6px; border:1px solid #ccc;">実現利益</th>
+                            </tr>
+                    `;
+
+                    data.realized_trades.forEach(t => {
+                        const realizedProfit = (t.sell_price - t.cost) * t.shares;
+                        const profitColor = realizedProfit >= 0 ? "color:green;" : "color:red;";
+
+                        tradesHtml += `
+                            <tr>
+                                <td style="padding:6px; border:1px solid #ccc;">${t.name}</td>
+                                <td style="padding:6px; border:1px solid #ccc;">${t.sell_date}</td>
+                                <td style="padding:6px; border:1px solid #ccc;">${t.shares}</td>
+                                <td style="padding:6px; border:1px solid #ccc;">${t.sell_price}</td>
+                                <td style="padding:6px; border:1px solid #ccc;">${t.cost}</td>
+                                <td style="padding:6px; border:1px solid #ccc; ${profitColor}">
+                                    ${realizedProfit.toLocaleString()}
+                                </td>
+                            </tr>
+                        `;
+                    });
+
+                    tradesHtml += "</table>";
+
+                    // 保有株式一覧の下に売却履歴を追加
+                    document.getElementById('summary').insertAdjacentHTML("afterend", tradesHtml);
+                }
+
+
+                // ---- 銘柄カード一覧 ----
                 let html = "";
                 data.portfolio.forEach(item => {
                     const profitClass = item.profit >= 0 ? "profit-positive" : "profit-negative";
                     const profitText = item.profit.toLocaleString();
 
                     html += `
-
                         <div class="card">
                             <div class="title">[${item.ticker}] ${item.name}</div>
                             <div>購入単価: ${item.cost} / 株数: ${item.shares}</div>
@@ -702,31 +744,22 @@ async def mobile():
                                 損益: ${profitText} 円
                             </div>
 
-                            <!-- AI コメント表示 -->
                             <div style="
                                 margin-top:10px;
                                 padding:10px;
                                 background:#eef;
                                 border-radius:6px;
-                                max-height:none;
-                                overflow-wrap:break-word;
                                 white-space:pre-wrap;
                             ">
                                 <b>AI コメント</b><br>
-                                <div style="
-                                    font-size:14px;
-                                    line-height:1.5;
-                                    white-space:pre-wrap;
-                                    overflow-wrap:break-word;
-                                ">
-                                    ${item.ai_comment ? item.ai_comment : "（コメントなし）"}
+                                <div style="font-size:14px; line-height:1.5;">
+                                    ${item.ai_comment || "（コメントなし）"}
                                 </div>
                             </div>
 
                             <button onclick="alert('編集は Step9 で実装します')">編集</button>
                             <button onclick="alert('削除は Step9 で実装します')">削除</button>
                         </div>
-
                     `;
                 });
 
@@ -745,25 +778,15 @@ async def mobile():
             async function updatePrices() {
                 const res = await fetch('/update_prices', { method: 'POST' });
                 const data = await res.json();
-
-                if (data.error) {
-                    alert(data.error);
-                    return;
-                }
-
+                if (data.error) { alert(data.error); return; }
                 alert("株価を更新しました！");
-                loadData();  // 再読み込み
+                loadData();
             }
 
             async function updateAI() {
                 const res = await fetch('/update_ai_comment', { method: 'POST' });
                 const data = await res.json();
-
-                if (data.error) {
-                    alert(data.error);
-                    return;
-                }
-
+                if (data.error) { alert(data.error); return; }
                 alert("AI コメントを更新しました！");
                 loadData();
             }
@@ -771,12 +794,7 @@ async def mobile():
             async function updateAISummary() {
                 const res = await fetch('/update_ai_summary', { method: 'POST' });
                 const data = await res.json();
-
-                if (data.error) {
-                    alert(data.error);
-                    return;
-                }
-
+                if (data.error) { alert(data.error); return; }
                 alert("AI 統括コメントを更新しました！");
                 loadData();
             }
@@ -786,3 +804,4 @@ async def mobile():
     </body>
     </html>
     """
+
