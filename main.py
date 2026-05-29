@@ -285,6 +285,18 @@ async def upload(file: UploadFile = File(...)):
             "progress_to_target": progress_to_target
         }
 
+        # ---- 実現利益（realized_trades） ----
+        realized_profit_total = 0
+        for t in realized_trades_json:
+            realized_profit_total += (t["sell_price"] - t["cost"]) * t["shares"]
+
+        # ---- Summary を売却履歴込みに修正 ----
+        summary_json["realized_profit"] = realized_profit_total
+        summary_json["unrealized_profit"] = total_profit
+        summary_json["total_profit"] = total_profit + realized_profit_total
+        summary_json["total_profit_rate"] = summary_json["total_profit"] / invested_amount
+        summary_json["progress_to_target"] = summary_json["total_profit"] / annual_target_profit
+
         # ---- realized_trades 読み込み ----
         if "realized_trades" in xls.sheet_names:
             df_trades = pd.read_excel(xls, sheet_name="realized_trades")
@@ -620,7 +632,7 @@ async def mobile():
         <div class="summary-box" id="ai_summary">
             AI統括コメントを読み込み中...
         </div>
-        
+                
         <!-- 銘柄一覧 -->
         <div id="list">読み込み中...</div>
 
@@ -641,12 +653,17 @@ async def mobile():
 
                 // ---- Summary 表示 ----
                 const s = data.summary;
+
                 document.getElementById('summary').innerHTML = `
                     <div class="summary-title">📊 Summary</div>
                     <div>投資枠: ${s.total_investment_frame.toLocaleString()} 円</div>
                     <div>投資額: ${s.invested_amount.toLocaleString()} 円</div>
                     <div>評価額: ${s.portfolio_value.toLocaleString()} 円</div>
-                    <div>損益: ${s.total_profit.toLocaleString()} 円</div>
+
+                    <div>実現利益: ${s.realized_profit.toLocaleString()} 円</div>
+                    <div>含み損益: ${s.unrealized_profit.toLocaleString()} 円</div>
+                    <div>総合損益: ${s.total_profit.toLocaleString()} 円</div>
+
                     <div>損益率: ${(s.total_profit_rate * 100).toFixed(2)} %</div>
                     <div>残りキャッシュ: ${s.remaining_cash.toLocaleString()} 円</div>
                     <div>目標達成率: ${(s.progress_to_target * 100).toFixed(2)} %</div>
