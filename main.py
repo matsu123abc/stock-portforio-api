@@ -81,42 +81,61 @@ REALIZED_JSON = os.path.join(DATA_DIR, "realized_trades.json")
 # JSON 保存
 # -----------------------------
 def save_json(portfolio, summary, realized_trades):
-    with open(PORTFOLIO_JSON, "w", encoding="utf-8") as f:
-        json.dump(portfolio, f, ensure_ascii=False, indent=2)
+    # 一時ファイルに書いてからリネームすることで途中書き込みを防ぐ（簡易的な原子書き込み）
+    def _atomic_write(path, data):
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)
 
-    with open(SUMMARY_JSON, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
-
-    with open(REALIZED_JSON, "w", encoding="utf-8") as f:
-        json.dump(realized_trades, f, ensure_ascii=False, indent=2)
-
+    _atomic_write(PORTFOLIO_JSON, portfolio)
+    _atomic_write(SUMMARY_JSON, summary)
+    _atomic_write(REALIZED_JSON, realized_trades)
 
 # -----------------------------
 # JSON 読み込み
 # -----------------------------
 def load_json():
+    # ファイルが無ければ None/空を返す
     if not os.path.exists(PORTFOLIO_JSON) or not os.path.exists(SUMMARY_JSON):
         return None, None, []
 
-    with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
-        portfolio = json.load(f)
+    # portfolio
+    try:
+        with open(PORTFOLIO_JSON, "r", encoding="utf-8") as f:
+            portfolio = json.load(f)
+    except Exception:
+        portfolio = None
 
-    with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
-        summary = json.load(f)
+    # summary
+    try:
+        with open(SUMMARY_JSON, "r", encoding="utf-8") as f:
+            summary = json.load(f)
+    except Exception:
+        summary = {}
 
-    if os.path.exists(REALIZED_JSON):
-        with open(REALIZED_JSON, "r", encoding="utf-8") as f:
-            realized_trades = json.load(f)
-    else:
+    # realized_trades
+    try:
+        if os.path.exists(REALIZED_JSON):
+            with open(REALIZED_JSON, "r", encoding="utf-8") as f:
+                realized_trades = json.load(f)
+        else:
+            realized_trades = []
+    except Exception:
         realized_trades = []
 
-    # summary にキーが無ければ初期値を入れておく（UI 停止を防ぐ）
+    # summary の必須キーを補完（UI 停止を防ぐ）
     summary.setdefault("ai_summary_comment", "")
     summary.setdefault("realized_profit", 0)
     summary.setdefault("unrealized_profit", 0)
     summary.setdefault("total_profit", summary.get("total_profit", 0))
     summary.setdefault("total_profit_rate", summary.get("total_profit_rate", 0.0))
     summary.setdefault("progress_to_target", summary.get("progress_to_target", 0.0))
+    summary.setdefault("total_investment_frame", summary.get("total_investment_frame", 10000000))
+    summary.setdefault("invested_amount", summary.get("invested_amount", 0))
+    summary.setdefault("portfolio_value", summary.get("portfolio_value", 0))
+    summary.setdefault("annual_target_profit", summary.get("annual_target_profit", 3000000))
+    summary.setdefault("remaining_cash", summary.get("remaining_cash", summary.get("total_investment_frame", 10000000) - summary.get("invested_amount", 0)))
 
     return portfolio, summary, realized_trades
 
@@ -619,80 +638,62 @@ async def get_data():
     if portfolio is None:
         return {"error": "まだデータが保存されていません"}
 
-    # summary が None の場合は空 dict に
+    # safety: ensure lists/dicts
     if summary is None:
         summary = {}
-
-    # realized_trades が None の場合は空リストに
     if realized_trades is None:
         realized_trades = []
+    if portfolio is None:
+        portfolio = []
 
-    # --- 実現利益が無ければ realized_trades から計算 ---
-    if "realized_profit" not in summary:
-        realized_profit_total = 0
-        try:
-            for t in realized_trades:
+    # --- 実現利益が無ければ計算 ---
+    if "realized_profit" not in summary or summary.get("realized_profit") is None:
+        rp = 0
+        for t in realized_trades:
+            try:
                 sell_price = float(t.get("sell_price") or 0)
                 cost = float(t.get("cost") or 0)
                 shares = float(t.get("shares") or 0)
-                realized_profit_total += (sell_price - cost) * shares
-        except Exception:
-            realized_profit_total = 0
-        summary["realized_profit"] = int(realized_profit_total)
+                rp += (sell_price - cost) * shares
+            except:
+                continue
+        summary["realized_profit"] = int(rp)
 
-    # --- 含み損益（unrealized_profit）が無ければ portfolio から計算 ---
-    if "unrealized_profit" not in summary:
-        try:
-            # portfolio は list of dict
-            invested_amount = 0
-            portfolio_value = 0
-            for p in portfolio:
-                cost = float(p.get("cost") or 0)
-                shares = float(p.get("shares") or 0)
-                invested_amount += cost * shares
-
-                # value 列があるなら使う。なければ current_price * shares を試す
+    # --- 含み損益が無ければ計算（portfolio から） ---
+    if "unrealized_profit" not in summary or summary.get("unrealized_profit") is None:
+        invested = 0
+        value = 0
+        for p in portfolio:
+            try:
+                c = float(p.get("cost") or 0)
+                s = float(p.get("shares") or 0)
+                invested += c * s
                 v = p.get("value", None)
                 if v is None or v == "":
-                    try:
-                        cp = float(p.get("current_price") or 0)
-                        portfolio_value += cp * shares
-                    except:
-                        portfolio_value += 0
+                    cp = float(p.get("current_price") or 0)
+                    value += cp * s
                 else:
-                    try:
-                        portfolio_value += float(v)
-                    except:
-                        portfolio_value += 0
+                    value += float(v)
+            except:
+                continue
+        summary["unrealized_profit"] = int(value - invested)
+        # ensure invested_amount and portfolio_value exist
+        summary.setdefault("invested_amount", int(invested))
+        summary.setdefault("portfolio_value", float(value))
 
-            unrealized = portfolio_value - invested_amount
-        except Exception:
-            unrealized = 0
-        summary["unrealized_profit"] = int(unrealized)
+    # --- 総合損益が無ければ実現 + 含みで計算 ---
+    if "total_profit" not in summary or summary.get("total_profit") is None:
+        summary["total_profit"] = int(summary.get("realized_profit", 0) + summary.get("unrealized_profit", 0))
 
-    # --- 総合損益（total_profit）が無ければ実現 + 含みで計算 ---
-    if "total_profit" not in summary:
-        try:
-            summary["total_profit"] = int(summary.get("realized_profit", 0) + summary.get("unrealized_profit", 0))
-        except Exception:
-            summary["total_profit"] = 0
+    # --- rate/progress 補完 ---
+    invested_amount = float(summary.get("invested_amount") or 0)
+    if "total_profit_rate" not in summary or summary.get("total_profit_rate") is None:
+        summary["total_profit_rate"] = (summary["total_profit"] / invested_amount) if invested_amount > 0 else 0.0
 
-    # --- total_profit_rate / progress_to_target の補完（安全に） ---
-    if "total_profit_rate" not in summary:
-        try:
-            invested_amount = float(summary.get("invested_amount") or 0)
-            summary["total_profit_rate"] = (summary.get("total_profit", 0) / invested_amount) if invested_amount > 0 else 0.0
-        except Exception:
-            summary["total_profit_rate"] = 0.0
+    annual_target = float(summary.get("annual_target_profit") or 0)
+    if "progress_to_target" not in summary or summary.get("progress_to_target") is None:
+        summary["progress_to_target"] = (summary["total_profit"] / annual_target) if annual_target > 0 else 0.0
 
-    if "progress_to_target" not in summary:
-        try:
-            annual_target = float(summary.get("annual_target_profit") or 0)
-            summary["progress_to_target"] = (summary.get("total_profit", 0) / annual_target) if annual_target > 0 else 0.0
-        except Exception:
-            summary["progress_to_target"] = 0.0
-
-    # ai_summary_comment が無ければ空文字を入れておく（UI 安定化）
     summary.setdefault("ai_summary_comment", "")
 
     return {
